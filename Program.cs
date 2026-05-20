@@ -80,8 +80,8 @@ public class Program
         if (message.Author.Id == 341726443295866893)
             await ReactAsync(message, new Emoji("🫃"));
 
-        if (message.Author.Id == 178295063808311297)
-            await ReactAsync(message, Emote.Parse("<:quell:1498755317700493414>"));
+        // if (message.Author.Id == 442395385403801600)
+            // await ReactAsync(message, Emote.Parse("<:quell:1498755317700493414>"));
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g => g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
         if (matchedGuild != null)
