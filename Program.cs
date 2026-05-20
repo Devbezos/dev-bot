@@ -1,6 +1,7 @@
 
 using dev_library.Clients;
 using dev_library.Data;
+using dev_library.Data.Discord;
 using dev_library.Data.WoW.Raidbots;
 using dev_refined;
 using dev_refined.Clients;
@@ -316,6 +317,15 @@ public class Program
                 else await RefinedClient.PostBadPlayers();
             }
 
+            try
+            {
+                await CheckNewApplications();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"CheckNewApplications failed: {ex.Message}");
+            }
+
             // Sleep until the start of the next minute
             var delayUntilNextMinute = TimeSpan.FromSeconds(60 - now.Second);
             await Task.Delay(delayUntilNextMinute);
@@ -351,5 +361,66 @@ public class Program
         }
 
         Console.WriteLine("Program.SendDroptimizerReminders: END");
+    }
+
+    private static async Task CheckNewApplications()
+    {
+        Console.WriteLine("Program.CheckNewApplications: START");
+        var guildsWithApps = AppSettings.Guilds.Where(g => g.ApplicationSheet != null && g.Channels?.ContainsKey("applications") == true);
+
+        foreach (var guild in guildsWithApps)
+        {
+            var channelId = guild.Channels["applications"];
+            var applications = await GoogleSheetsClient.ReadApplications(guild.ApplicationSheet);
+            var unposted = applications.Where(a => !a.IsPosted).ToList();
+
+            if (unposted.Count == 0) continue;
+
+            var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) continue;
+
+            foreach (var app in unposted)
+            {
+                Console.WriteLine($"Program.CheckNewApplications: Posting row {app.RowIndex} from {app.ContactInfo}");
+
+                var message = app.ToDiscordMessage();
+                if (message.Length <= 2000)
+                {
+                    await channel.SendMessageAsync(message);
+                }
+                else
+                {
+                    var chunks = SplitMessage(message, 2000);
+                    foreach (var chunk in chunks)
+                        await channel.SendMessageAsync(chunk);
+                }
+
+                await GoogleSheetsClient.MarkApplicationAsPosted(guild.ApplicationSheet, app.RowIndex);
+            }
+        }
+
+        Console.WriteLine("Program.CheckNewApplications: END");
+    }
+
+    private static List<string> SplitMessage(string message, int maxLength)
+    {
+        var chunks = new List<string>();
+        var lines = message.Split('\n');
+        var current = new System.Text.StringBuilder();
+
+        foreach (var line in lines)
+        {
+            if (current.Length + line.Length + 1 > maxLength)
+            {
+                chunks.Add(current.ToString().TrimEnd());
+                current.Clear();
+            }
+            current.AppendLine(line);
+        }
+
+        if (current.Length > 0)
+            chunks.Add(current.ToString().TrimEnd());
+
+        return chunks;
     }
 }
