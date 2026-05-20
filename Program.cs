@@ -19,6 +19,7 @@ public class Program
     private static readonly RealmClient RealmClient = new();
     private static readonly RefinedClient RefinedClient = new();
     private static GoogleSheetsClient GoogleSheetsClient;
+    private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId)> _trackedApplicationMessages = new();
     // private static AiClient AiClient;
 
     public static async Task Main()
@@ -39,6 +40,7 @@ public class Program
         DiscordBotClient.Ready += OnReady;
         DiscordBotClient.MessageReceived += MonitorMessages;
         DiscordBotClient.GuildMemberUpdated += OnGuildMemberUpdatedAsync;
+        DiscordBotClient.ReactionAdded += OnReactionAdded;
 
         await DiscordBotClient.LoginAsync(TokenType.Bot, AppSettings.Discord.Token);
         await DiscordBotClient.StartAsync();
@@ -55,6 +57,38 @@ public class Program
             var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
             if (channel != null)
                 await channel.SendMessageAsync(content);
+        };
+
+        DiscordClient.SendEmbedAsync = async (channelId, embed) =>
+        {
+            var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel != null)
+                await channel.SendMessageAsync(embed: embed);
+        };
+
+        DiscordClient.CreateApplicationChannelAsync = async (categoryId, channelName) =>
+        {
+            var guild = DiscordBotClient.Guilds.FirstOrDefault(g =>
+                g.CategoryChannels.Any(c => c.Id == categoryId));
+            if (guild == null) return 0;
+            var channel = await guild.CreateTextChannelAsync(channelName, p => p.CategoryId = categoryId);
+            return channel.Id;
+        };
+
+        DiscordClient.SendEmbedWithIdAsync = async (channelId, embed) =>
+        {
+            var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) return 0;
+            var message = await channel.SendMessageAsync(embed: embed);
+            return message.Id;
+        };
+
+        DiscordClient.PinMessageAsync = async (channelId, messageId) =>
+        {
+            var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) return;
+            var message = await channel.GetMessageAsync(messageId) as IUserMessage;
+            if (message != null) await message.PinAsync();
         };
 
         await ScheduleCheck();
@@ -366,40 +400,65 @@ public class Program
     private static async Task CheckNewApplications()
     {
         Console.WriteLine("Program.CheckNewApplications: START");
-        var guildsWithApps = AppSettings.Guilds.Where(g => g.ApplicationSheet != null && g.Channels?.ContainsKey("applications") == true);
+        var discordClient = new DiscordClient();
+        var guildsWithApps = AppSettings.Guilds.Where(g =>
+            g.ApplicationSheet != null &&
+            g.Channels?.ContainsKey("applicationsCategory") == true &&
+            g.Channels?.ContainsKey("applicationsOfficer") == true);
 
         foreach (var guild in guildsWithApps)
         {
-            var channelId = guild.Channels["applications"];
+            var categoryId = guild.Channels["applicationsCategory"];
+            var officerChannelId = guild.Channels["applicationsOfficer"];
+            var archiveCategoryId = guild.Channels.GetValueOrDefault("applicationsArchiveCategory");
             var applications = await GoogleSheetsClient.ReadApplications(guild.ApplicationSheet);
             var unposted = applications.Where(a => !a.IsPosted).ToList();
 
             if (unposted.Count == 0) continue;
 
-            var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
-            if (channel == null) continue;
-
             foreach (var app in unposted)
             {
                 Console.WriteLine($"Program.CheckNewApplications: Posting row {app.RowIndex} from {app.ContactInfo}");
-
-                var message = app.ToDiscordMessage();
-                if (message.Length <= 2000)
-                {
-                    await channel.SendMessageAsync(message);
-                }
-                else
-                {
-                    var chunks = SplitMessage(message, 2000);
-                    foreach (var chunk in chunks)
-                        await channel.SendMessageAsync(chunk);
-                }
-
+                var (channelId, messageIds) = await discordClient.PostApplication(categoryId, officerChannelId, app);
+                foreach (var msgId in messageIds.Where(id => id != 0))
+                    _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId);
                 await GoogleSheetsClient.MarkApplicationAsPosted(guild.ApplicationSheet, app.RowIndex);
             }
         }
 
         Console.WriteLine("Program.CheckNewApplications: END");
+    }
+
+    private static async Task OnReactionAdded(
+        Cacheable<IUserMessage, ulong> cachedMessage,
+        Cacheable<IMessageChannel, ulong> cachedChannel,
+        SocketReaction reaction)
+    {
+        if (reaction.Emote.Name != "❌") return;
+        if (reaction.UserId != 146664503243833345UL) return;
+        if (!_trackedApplicationMessages.TryGetValue(cachedMessage.Id, out var tracked)) return;
+        var (channelId, archiveCategoryId) = tracked;
+
+        var message = await cachedMessage.GetOrDownloadAsync();
+        if (message == null) return;
+
+        var xCount = message.Reactions
+            .Where(r => r.Key.Name == "❌")
+            .Sum(r => r.Value.ReactionCount);
+
+        if (xCount < 1) return;
+
+        var textChannel = DiscordBotClient.GetChannel(channelId) as SocketTextChannel;
+        if (textChannel == null) return;
+
+        if (archiveCategoryId != 0)
+        {
+            await textChannel.ModifyAsync(p => p.CategoryId = archiveCategoryId);
+            await textChannel.SyncPermissionsAsync();
+        }
+
+        _trackedApplicationMessages.Remove(cachedMessage.Id);
+        Console.WriteLine($"Program.OnReactionAdded: Channel {channelId} moved to archive (application denied)");
     }
 
     private static List<string> SplitMessage(string message, int maxLength)
