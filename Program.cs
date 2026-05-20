@@ -8,7 +8,10 @@ using dev_refined.Clients;
 using Discord;
 using Discord.Audio;
 using Discord.WebSocket;
+using Serilog;
+using Serilog.Events;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using TimeZoneConverter;
 
 public class Program
@@ -24,7 +27,12 @@ public class Program
 
     public static async Task Main()
     {
-        Console.WriteLine("Program.Main: START");
+        Serilog.Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console(outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
+            .CreateLogger();
+
+        LogInfo("Starting");
         var discordConfig = new DiscordSocketConfig
         {
             GatewayIntents = GatewayIntents.AllUnprivileged | GatewayIntents.MessageContent | GatewayIntents.Guilds | GatewayIntents.GuildMembers,
@@ -45,13 +53,13 @@ public class Program
         await DiscordBotClient.LoginAsync(TokenType.Bot, AppSettings.Discord.Token);
         await DiscordBotClient.StartAsync();
 
-        Console.WriteLine("Program.Main: END");
+        LogInfo("Bot started");
         await Task.Delay(-1);
     }
 
     private static async Task OnReady()
     {
-        Console.WriteLine("Program.OnReady: START");
+        LogInfo("Bot ready");
         DiscordClient.SendMessageAsync = async (channelId, content) =>
         {
             var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
@@ -92,7 +100,6 @@ public class Program
         };
 
         await ScheduleCheck();
-        Console.WriteLine("Program.OnReady: END");
     }
 
     private static async Task OnGuildMemberUpdatedAsync(Cacheable<SocketGuildUser, ulong> before, SocketGuildUser after)
@@ -109,11 +116,11 @@ public class Program
 
     public static async Task MonitorMessages(SocketMessage message)
     {
-        Console.WriteLine("Program.MonitorMessages: START");
         if (message.Author.IsBot) return;
+        LogInfo($"Message from {message.Author.Username} in #{message.Channel.Name}");
 
-        if (message.Author.Id == 341726443295866893)
-            await ReactAsync(message, new Emoji("🫃"));
+        //if (message.Author.Id == 341726443295866893)
+        //    await ReactAsync(message, new Emoji("🫃"));
 
         // if (message.Author.Id == 442395385403801600)
             // await ReactAsync(message, Emote.Parse("<:quell:1498755317700493414>"));
@@ -144,12 +151,11 @@ public class Program
         //     await SendMessageAsync(message.Channel, response);
         // }
 
-        Console.WriteLine("Program.MonitorMessages: END");
     }
 
     public static async Task MonitorDroptimizers(SocketMessage message)
     {
-        Console.WriteLine("Program.MonitorDroptimizers: START");
+        LogInfo($"Processing message from {message.Author.Username} in #{message.Channel.Name}");
         var raidBotsUrls = Helpers.ExtractUrls(message.Content);
         var guild = AppSettings.Guilds.First(g => g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
 
@@ -157,14 +163,13 @@ public class Program
         {
             if (!((SocketGuildUser)message.Author).GuildPermissions.Administrator)
             {
-                Console.WriteLine(message.Content);
+                LogWarn($"Deleted invalid message from {message.Author.Username}: {message.Content}");
                 await DeleteAsync(message);
             }
-            Console.WriteLine("Program.MonitorDroptimizers: END");
             return;
         }
 
-        Console.WriteLine("Program.MonitorDroptimizers: processing reports");
+        LogInfo("Processing droptimizer reports");
 
         try
         {
@@ -173,7 +178,7 @@ public class Program
             foreach (var raidBotsUrl in raidBotsUrls)
             {
                 var reportId = raidBotsUrl.Split('/').Last();
-                Console.WriteLine($"Processing {raidBotsUrl}");
+                LogInfo($"Processing {raidBotsUrl}");
 
                 var response = await WoWAuditClient.UpdateWishlist(reportId, guild.Name);
 
@@ -203,14 +208,13 @@ public class Program
                     await textChannel.SendMessageAsync("https://tenor.com/view/bosnov-67-bosnov-67-67-meme-gif-16727368109953357722", messageReference: new MessageReference(message.Id));
             }
 
-            Console.WriteLine("Program.MonitorDroptimizers: END");
+            LogInfo("Done");
         }
         catch (Exception ex)
         {
             await ReactAsync(message, new Emoji("❌"));
             await SendDmAsync(message.Author, "WoWAudit is currently down. Please try again later. Also compliment epic on his tuna can");
-            Console.WriteLine(ex.Message);
-            Console.WriteLine("Program.MonitorDroptimizers: END (exception)");
+            LogError(ex.Message);
             throw;
         }
     }
@@ -218,25 +222,20 @@ public class Program
     // Dry-run aware Discord helpers
     private static async Task SendMessageAsync(IMessageChannel channel, string content)
     {
-        Console.WriteLine($"Program.SendMessageAsync: START #{channel.Name}");
-        if (AppSettings.DryRun) Console.WriteLine($"[DRY RUN] Send to #{channel.Name}: {content}");
+        if (AppSettings.DryRun) LogInfo($"[DRY RUN] Send to #{channel.Name}: {content}");
         var allowedMentions = AppSettings.DryRun ? AllowedMentions.None : AllowedMentions.All;
         await channel.SendMessageAsync(content, allowedMentions: allowedMentions);
-        Console.WriteLine($"Program.SendMessageAsync: END");
     }
 
     private static async Task SendDmAsync(IUser user, string content)
     {
-        Console.WriteLine($"Program.SendDmAsync: START {user.Username}");
-        if (AppSettings.DryRun) Console.WriteLine($"[DRY RUN] DM to {user.Username}: {content}");
+        if (AppSettings.DryRun) LogInfo($"[DRY RUN] DM to {user.Username}: {content}");
         else await user.SendMessageAsync(content);
-        Console.WriteLine($"Program.SendDmAsync: END");
     }
 
     private static async Task ReactAsync(IMessage message, IEmote emote)
     {
-        Console.WriteLine($"Program.ReactAsync: START {emote.Name}");
-        if (AppSettings.DryRun) Console.WriteLine($"[DRY RUN] React {emote.Name} on message {message.Id}");
+        if (AppSettings.DryRun) LogInfo($"[DRY RUN] React {emote.Name} on message {message.Id}");
         else
         {
             try
@@ -245,45 +244,59 @@ public class Program
             }
             catch (Discord.Net.HttpException ex) when ((int)ex.HttpCode == 403)
             {
-                Console.WriteLine($"[WARN] Missing permissions to react in #{message.Channel.Name}");
+                LogWarn($"Missing permissions to react in #{message.Channel.Name}");
             }
         }
-        Console.WriteLine($"Program.ReactAsync: END");
     }
 
     private static async Task DeleteAsync(IMessage message)
     {
-        Console.WriteLine($"Program.DeleteAsync: START {message.Id}");
-        if (AppSettings.DryRun) Console.WriteLine($"[DRY RUN] Delete message {message.Id} from {message.Author.Username}");
+        if (AppSettings.DryRun) LogInfo($"[DRY RUN] Delete message {message.Id} from {message.Author.Username}");
         else await message.DeleteAsync();
-        Console.WriteLine($"Program.DeleteAsync: END");
     }
+
+    private static void LogInfo(string msg, [CallerMemberName] string method = "") =>
+        Serilog.Log.ForContext("SourceContext", $"Program.{method}").Information("{Message}", msg);
+
+    private static void LogWarn(string msg, [CallerMemberName] string method = "") =>
+        Serilog.Log.ForContext("SourceContext", $"Program.{method}").Warning("{Message}", msg);
+
+    private static void LogError(string msg, [CallerMemberName] string method = "") =>
+        Serilog.Log.ForContext("SourceContext", $"Program.{method}").Error("{Message}", msg);
 
     private static Task Log(LogMessage msg)
     {
-        Console.WriteLine(msg.ToString());
+        var level = msg.Severity switch
+        {
+            LogSeverity.Critical => LogEventLevel.Fatal,
+            LogSeverity.Error    => LogEventLevel.Error,
+            LogSeverity.Warning  => LogEventLevel.Warning,
+            LogSeverity.Verbose  => LogEventLevel.Verbose,
+            LogSeverity.Debug    => LogEventLevel.Debug,
+            _                    => LogEventLevel.Information
+        };
+        Serilog.Log.ForContext("SourceContext", $"Discord.{msg.Source}").Write(level, "{Message}", msg.Message ?? msg.Exception?.Message ?? string.Empty);
         return Task.CompletedTask;
     }
 
     public static async Task ReplyToSpecificMessage(ulong channelId, ulong messageId, string replyContent)
     {
-        Console.WriteLine($"Program.ReplyToSpecificMessage: START {messageId}");
+        LogInfo($"Replying to message {messageId} in channel {channelId}");
         var channel = await DiscordBotClient.GetChannelAsync(channelId) as SocketTextChannel;
         var message = await channel.GetMessageAsync(messageId) as IUserMessage;
 
         if (message == null)
         {
-            Console.WriteLine("Message not found!");
+            LogWarn($"Message {messageId} not found");
             return;
         }
 
         await channel.SendMessageAsync(text: replyContent, messageReference: new MessageReference(message.Id));
-        Console.WriteLine($"Program.ReplyToSpecificMessage: END");
     }
 
     private static async Task PlaySound(IAudioClient client, string filePath)
     {
-        Console.WriteLine($"Program.PlaySound: START {filePath}");
+        LogInfo($"Playing {filePath}");
         using var ffmpeg = CreateStream(filePath);
         using var output = ffmpeg.StandardOutput.BaseStream;
         using var discord = client.CreatePCMStream(AudioApplication.Voice);
@@ -296,12 +309,11 @@ public class Program
         {
             await discord.FlushAsync();
         }
-        Console.WriteLine($"Program.PlaySound: END");
     }
 
     private static Process CreateStream(string filePath)
     {
-        Console.WriteLine($"Program.CreateStream: START {filePath}");
+        LogInfo($"Creating stream for {filePath}");
         var process = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -315,17 +327,15 @@ public class Program
             }
         };
 
-        process.ErrorDataReceived += (sender, e) => Console.WriteLine($"FFmpeg Error: {e.Data}");
+        process.ErrorDataReceived += (sender, e) => { if (e.Data != null) LogError($"FFmpeg error: {e.Data}"); };
         process.Start();
         process.BeginErrorReadLine();
-
-        Console.WriteLine($"Program.CreateStream: END");
         return process;
     }
 
     private static async Task ScheduleCheck()
     {
-        Console.WriteLine("Program.ScheduleCheck: START");
+        LogInfo("Scheduler started");
         var eastern = TZConvert.GetTimeZoneInfo("Eastern Standard Time");
 
         while (true)
@@ -336,7 +346,7 @@ public class Program
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"PostServerAvailability failed: {ex.Message}");
+                LogError($"PostServerAvailability failed: {ex.Message}");
             }
 
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
@@ -347,7 +357,7 @@ public class Program
             }
             else if (IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && IsGuildActive(g, now)))
             {
-                if (AppSettings.DryRun) Console.WriteLine("[DRY RUN] PostBadPlayers");
+                if (AppSettings.DryRun) LogInfo("[DRY RUN] PostBadPlayers");
                 else await RefinedClient.PostBadPlayers();
             }
 
@@ -357,11 +367,11 @@ public class Program
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"CheckNewApplications failed: {ex.Message}");
+                LogError($"CheckNewApplications failed: {ex.Message}");
             }
 
-            // Sleep until the start of the next minute
             var delayUntilNextMinute = TimeSpan.FromSeconds(60 - now.Second);
+            Console.Write($"\r[{DateTime.Now:HH:mm:ss}] Scheduler idle, next check at {DateTime.Now.Add(delayUntilNextMinute):HH:mm:ss}   ");
             await Task.Delay(delayUntilNextMinute);
         }
     }
@@ -376,7 +386,7 @@ public class Program
 
     private static async Task SendDroptimizerReminders()
     {
-        Console.WriteLine("Program.SendDroptimizerReminders: START");
+        LogInfo("Sending droptimizer reminders");
         var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, TZConvert.GetTimeZoneInfo("Eastern Standard Time"));
 
         foreach (var guild in AppSettings.Guilds.Where(g => g.Features.DroptimizerReminder && IsGuildActive(g, now)))
@@ -394,12 +404,10 @@ public class Program
             }
         }
 
-        Console.WriteLine("Program.SendDroptimizerReminders: END");
     }
 
     private static async Task CheckNewApplications()
     {
-        Console.WriteLine("Program.CheckNewApplications: START");
         var discordClient = new DiscordClient();
         var guildsWithApps = AppSettings.Guilds.Where(g =>
             g.ApplicationSheet != null &&
@@ -418,7 +426,7 @@ public class Program
 
             foreach (var app in unposted)
             {
-                Console.WriteLine($"Program.CheckNewApplications: Posting row {app.RowIndex} from {app.ContactInfo}");
+                LogInfo($"Posting application row {app.RowIndex} from {app.ContactInfo}");
                 var (channelId, messageIds) = await discordClient.PostApplication(categoryId, officerChannelId, app);
                 foreach (var msgId in messageIds.Where(id => id != 0))
                     _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId, guild.DenyUserIds);
@@ -426,7 +434,6 @@ public class Program
             }
         }
 
-        Console.WriteLine("Program.CheckNewApplications: END");
     }
 
     private static async Task OnReactionAdded(
@@ -458,7 +465,7 @@ public class Program
         }
 
         _trackedApplicationMessages.Remove(cachedMessage.Id);
-        Console.WriteLine($"Program.OnReactionAdded: Channel {channelId} moved to archive (application denied)");
+        LogInfo($"Application denied, channel {channelId} moved to archive");
     }
 
     private static List<string> SplitMessage(string message, int maxLength)
