@@ -19,7 +19,7 @@ public class Program
     private static readonly RealmClient RealmClient = new();
     private static readonly RefinedClient RefinedClient = new();
     private static GoogleSheetsClient GoogleSheetsClient;
-    private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId)> _trackedApplicationMessages = new();
+    private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
     // private static AiClient AiClient;
 
     public static async Task Main()
@@ -421,7 +421,7 @@ public class Program
                 Console.WriteLine($"Program.CheckNewApplications: Posting row {app.RowIndex} from {app.ContactInfo}");
                 var (channelId, messageIds) = await discordClient.PostApplication(categoryId, officerChannelId, app);
                 foreach (var msgId in messageIds.Where(id => id != 0))
-                    _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId);
+                    _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId, guild.DenyUserIds);
                 await GoogleSheetsClient.MarkApplicationAsPosted(guild.ApplicationSheet, app.RowIndex);
             }
         }
@@ -435,9 +435,9 @@ public class Program
         SocketReaction reaction)
     {
         if (reaction.Emote.Name != "❌") return;
-        if (reaction.UserId != 146664503243833345UL) return;
         if (!_trackedApplicationMessages.TryGetValue(cachedMessage.Id, out var tracked)) return;
-        var (channelId, archiveCategoryId) = tracked;
+        var (channelId, archiveCategoryId, denyUserIds) = tracked;
+        if (denyUserIds.Length > 0 && !denyUserIds.Contains(reaction.UserId)) return;
 
         var message = await cachedMessage.GetOrDownloadAsync();
         if (message == null) return;
