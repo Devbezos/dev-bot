@@ -23,7 +23,7 @@ public class Program
     private static readonly RefinedClient RefinedClient = new();
     private static GoogleSheetsClient GoogleSheetsClient;
     private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
-    private const string ChannelCacheFile = "app-channels.json";
+    private static readonly string ChannelCacheFile = Path.Combine(AppContext.BaseDirectory, "app-channels.json");
     private record AppChannelEntry(string GuildName, ulong ChannelId);
     // private static AiClient AiClient;
 
