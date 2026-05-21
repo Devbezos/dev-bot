@@ -23,6 +23,8 @@ public class Program
     private static readonly RefinedClient RefinedClient = new();
     private static GoogleSheetsClient GoogleSheetsClient;
     private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
+    private const string ChannelCacheFile = "app-channels.json";
+    private record AppChannelEntry(ulong ChannelId, ulong ArchiveCategoryId, ulong[] DenyUserIds);
     // private static AiClient AiClient;
 
     public static async Task Main()
@@ -103,34 +105,49 @@ public class Program
         await ScheduleCheck();
     }
 
+    private static List<AppChannelEntry> LoadChannelCache()
+    {
+        if (!File.Exists(ChannelCacheFile)) return new();
+        var json = File.ReadAllText(ChannelCacheFile);
+        return System.Text.Json.JsonSerializer.Deserialize<List<AppChannelEntry>>(json) ?? new();
+    }
+
+    private static void SaveChannelCache(List<AppChannelEntry> entries)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(entries, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(ChannelCacheFile, json);
+    }
+
+    private static void AddToChannelCache(ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)
+    {
+        var entries = LoadChannelCache();
+        entries.RemoveAll(e => e.ChannelId == channelId);
+        entries.Add(new AppChannelEntry(channelId, archiveCategoryId, denyUserIds));
+        SaveChannelCache(entries);
+    }
+
+    private static void RemoveFromChannelCache(ulong channelId)
+    {
+        var entries = LoadChannelCache();
+        entries.RemoveAll(e => e.ChannelId == channelId);
+        SaveChannelCache(entries);
+    }
+
     private static async Task RestoreTrackedApplicationMessages()
     {
-        var guildsWithApps = AppSettings.Guilds.Where(g =>
-            g.ApplicationSheet != null &&
-            g.Channels?.ContainsKey("applicationsCategory") == true &&
-            g.Channels?.ContainsKey("applicationsArchiveCategory") == true);
-
-        foreach (var guild in guildsWithApps)
+        var entries = LoadChannelCache();
+        var restored = 0;
+        foreach (var entry in entries)
         {
-            var categoryId = guild.Channels["applicationsCategory"];
-            var archiveCategoryId = guild.Channels["applicationsArchiveCategory"];
-
-            var discordGuild = DiscordBotClient.Guilds
-                .FirstOrDefault(dg => dg.TextChannels.Any(c => c.CategoryId == categoryId));
-            if (discordGuild == null) continue;
-
-            var appChannels = discordGuild.TextChannels.Where(c => c.CategoryId == categoryId).ToList();
-            foreach (var channel in appChannels)
-            {
-                var pins = await channel.GetPinnedMessagesAsync();
-                var pinned = pins.FirstOrDefault();
-                if (pinned != null)
-                {
-                    _trackedApplicationMessages[pinned.Id] = (channel.Id, archiveCategoryId, guild.DenyUserIds);
-                    LogInfo($"Restored tracking: #{channel.Name} (msg {pinned.Id})");
-                }
-            }
+            var channel = DiscordBotClient.GetChannel(entry.ChannelId) as SocketTextChannel;
+            if (channel == null) continue;
+            var pins = await channel.GetPinnedMessagesAsync();
+            var pinned = pins.FirstOrDefault(m => m.Author.Id == DiscordBotClient.CurrentUser.Id);
+            if (pinned == null) continue;
+            _trackedApplicationMessages[pinned.Id] = (entry.ChannelId, entry.ArchiveCategoryId, entry.DenyUserIds);
+            restored++;
         }
+        LogInfo($"Restored {restored}/{entries.Count} tracked application channel(s) from cache");
     }
 
     private static async Task OnGuildMemberUpdatedAsync(Cacheable<SocketGuildUser, ulong> before, SocketGuildUser after)
@@ -460,7 +477,10 @@ public class Program
                 LogInfo($"Posting application row {app.RowIndex} from {app.ContactInfo}");
                 var (channelId, messageIds) = await discordClient.PostApplication(categoryId, officerChannelId, app);
                 foreach (var msgId in messageIds.Where(id => id != 0))
+                {
                     _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId, guild.DenyUserIds);
+                    AddToChannelCache(channelId, archiveCategoryId, guild.DenyUserIds);
+                }
                 await GoogleSheetsClient.MarkApplicationAsPosted(guild.ApplicationSheet, app.RowIndex);
             }
         }
@@ -496,6 +516,7 @@ public class Program
         }
 
         _trackedApplicationMessages.Remove(cachedMessage.Id);
+        RemoveFromChannelCache(channelId);
         LogInfo($"Application denied, channel {channelId} moved to archive");
     }
 
