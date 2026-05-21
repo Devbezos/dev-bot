@@ -24,7 +24,7 @@ public class Program
     private static GoogleSheetsClient GoogleSheetsClient;
     private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
     private const string ChannelCacheFile = "app-channels.json";
-    private record AppChannelEntry(ulong ChannelId, ulong ArchiveCategoryId, ulong[] DenyUserIds);
+    private record AppChannelEntry(string GuildName, ulong ChannelId);
     // private static AiClient AiClient;
 
     public static async Task Main()
@@ -118,11 +118,11 @@ public class Program
         File.WriteAllText(ChannelCacheFile, json);
     }
 
-    private static void AddToChannelCache(ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)
+    private static void AddToChannelCache(string guildName, ulong channelId)
     {
         var entries = LoadChannelCache();
         entries.RemoveAll(e => e.ChannelId == channelId);
-        entries.Add(new AppChannelEntry(channelId, archiveCategoryId, denyUserIds));
+        entries.Add(new AppChannelEntry(guildName, channelId));
         SaveChannelCache(entries);
     }
 
@@ -139,12 +139,15 @@ public class Program
         var restored = 0;
         foreach (var entry in entries)
         {
+            var guild = AppSettings.Guilds.FirstOrDefault(g => g.Name == entry.GuildName);
+            if (guild == null) continue;
+            var archiveCategoryId = guild.Channels?.GetValueOrDefault("applicationsArchiveCategory") ?? 0;
             var channel = DiscordBotClient.GetChannel(entry.ChannelId) as SocketTextChannel;
             if (channel == null) continue;
             var pins = await channel.GetPinnedMessagesAsync();
             var pinned = pins.FirstOrDefault(m => m.Author.Id == DiscordBotClient.CurrentUser.Id);
             if (pinned == null) continue;
-            _trackedApplicationMessages[pinned.Id] = (entry.ChannelId, entry.ArchiveCategoryId, entry.DenyUserIds);
+            _trackedApplicationMessages[pinned.Id] = (entry.ChannelId, archiveCategoryId, guild.DenyUserIds);
             restored++;
         }
         LogInfo($"Restored {restored}/{entries.Count} tracked application channel(s) from cache");
@@ -479,7 +482,7 @@ public class Program
                 foreach (var msgId in messageIds.Where(id => id != 0))
                 {
                     _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId, guild.DenyUserIds);
-                    AddToChannelCache(channelId, archiveCategoryId, guild.DenyUserIds);
+                    AddToChannelCache(guild.Name, channelId);
                 }
                 await GoogleSheetsClient.MarkApplicationAsPosted(guild.ApplicationSheet, app.RowIndex);
             }
