@@ -43,6 +43,8 @@ public class Program
         AppSettings.Initialize();
         SqlClient.ConnectionString = AppSettings.MySql.ConnectionString;
         SqlClient.EnsureTable();
+        GuildRepository.SyncFromSettings(AppSettings.Guilds);
+        AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
         GoogleSheetsClient = new GoogleSheetsClient();
         // AiClient = new();
 
