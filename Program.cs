@@ -41,8 +41,8 @@ public class Program
         };
 
         AppSettings.Initialize();
-        ApplicationChannelCache.ConnectionString = AppSettings.MySql.ConnectionString;
-        ApplicationChannelCache.EnsureTable();
+        SqlClient.ConnectionString = AppSettings.MySql.ConnectionString;
+        SqlClient.EnsureTable();
         GoogleSheetsClient = new GoogleSheetsClient();
         // AiClient = new();
 
@@ -109,7 +109,7 @@ public class Program
 
     private static async Task RestoreTrackedApplicationMessages()
     {
-        var entries = ApplicationChannelCache.Load();
+        var entries = SqlClient.Load();
         var restored = 0;
         foreach (var entry in entries)
         {
@@ -407,7 +407,7 @@ public class Program
         foreach (var t in tracked)
         {
             _trackedApplicationMessages[t.MessageId] = (t.ChannelId, t.ArchiveCategoryId, t.DenyUserIds);
-            ApplicationChannelCache.Add(t.GuildName, t.ChannelId);
+            SqlClient.Add(t.GuildName, t.ChannelId);
         }
     }
 
@@ -469,7 +469,7 @@ public class Program
         }
 
         _trackedApplicationMessages.Remove(cachedMessage.Id);
-        ApplicationChannelCache.Remove(channelId);
+        SqlClient.Remove(channelId);
     }
 
 }

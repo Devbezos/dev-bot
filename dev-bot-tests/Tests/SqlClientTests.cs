@@ -3,15 +3,15 @@ using MySqlConnector;
 
 namespace dev_bot_tests.Tests
 {
-    public class ApplicationChannelCacheTests : IDisposable
+    public class SqlClientTests : IDisposable
     {
         private const string TestConnectionString = "Server=localhost;Port=3306;Database=dev_bot_test;Uid=root;Pwd=;";
 
-        public ApplicationChannelCacheTests()
+        public SqlClientTests()
         {
             EnsureTestDatabase();
-            ApplicationChannelCache.ConnectionString = TestConnectionString;
-            ApplicationChannelCache.EnsureTable();
+            SqlClient.ConnectionString = TestConnectionString;
+            SqlClient.EnsureTable();
             ClearTable();
         }
 
@@ -40,7 +40,7 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Load_EmptyTable_ReturnsEmptyList()
         {
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
 
             Assert.Empty(result);
         }
@@ -48,9 +48,9 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Load_WithRows_ReturnsEntries()
         {
-            ApplicationChannelCache.Add("REFORGED", 123456789ul);
+            SqlClient.Add("REFORGED", 123456789ul);
 
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
 
             Assert.Single(result);
             Assert.Equal("REFORGED", result[0].GuildName);
@@ -60,10 +60,10 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Load_MultipleRows_ReturnsAll()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
-            ApplicationChannelCache.Add("REFINED", 222ul);
+            SqlClient.Add("REFORGED", 111ul);
+            SqlClient.Add("REFINED", 222ul);
 
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
 
             Assert.Equal(2, result.Count);
         }
@@ -73,9 +73,9 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Add_NewEntry_IsPersisted()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
+            SqlClient.Add("REFORGED", 111ul);
 
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
 
             Assert.Single(result);
             Assert.Equal("REFORGED", result[0].GuildName);
@@ -85,10 +85,10 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Add_DuplicateChannelId_ReplacesExisting()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
-            ApplicationChannelCache.Add("REFINED", 111ul);
+            SqlClient.Add("REFORGED", 111ul);
+            SqlClient.Add("REFINED", 111ul);
 
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
 
             Assert.Single(result);
             Assert.Equal("REFINED", result[0].GuildName);
@@ -98,10 +98,10 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Add_MultipleEntries_AllPersisted()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
-            ApplicationChannelCache.Add("REFINED", 222ul);
+            SqlClient.Add("REFORGED", 111ul);
+            SqlClient.Add("REFINED", 222ul);
 
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
 
             Assert.Equal(2, result.Count);
         }
@@ -111,63 +111,33 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Remove_ExistingEntry_IsRemoved()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
+            SqlClient.Add("REFORGED", 111ul);
 
-            ApplicationChannelCache.Remove(111ul);
+            SqlClient.Remove(111ul);
 
-            Assert.Empty(ApplicationChannelCache.Load());
+            Assert.Empty(SqlClient.Load());
         }
 
         [Fact]
         public void Remove_NonExistentChannelId_DoesNotThrow()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
+            SqlClient.Add("REFORGED", 111ul);
 
-            var ex = Record.Exception(() => ApplicationChannelCache.Remove(999ul));
+            var ex = Record.Exception(() => SqlClient.Remove(999ul));
 
             Assert.Null(ex);
-            Assert.Single(ApplicationChannelCache.Load());
+            Assert.Single(SqlClient.Load());
         }
 
         [Fact]
         public void Remove_OnlyRemovesMatchingChannelId()
         {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
-            ApplicationChannelCache.Add("REFINED", 222ul);
+            SqlClient.Add("REFORGED", 111ul);
+            SqlClient.Add("REFINED", 222ul);
 
-            ApplicationChannelCache.Remove(111ul);
+            SqlClient.Remove(111ul);
 
-            var result = ApplicationChannelCache.Load();
-            Assert.Single(result);
-            Assert.Equal(222ul, result[0].ChannelId);
-        }
-    }
-}
-
-
-            Assert.Empty(ApplicationChannelCache.Load());
-        }
-
-        [Fact]
-        public void Remove_NonExistentChannelId_DoesNotThrow()
-        {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
-
-            var ex = Record.Exception(() => ApplicationChannelCache.Remove(999ul));
-
-            Assert.Null(ex);
-            Assert.Single(ApplicationChannelCache.Load());
-        }
-
-        [Fact]
-        public void Remove_OnlyRemovesMatchingChannelId()
-        {
-            ApplicationChannelCache.Add("REFORGED", 111ul);
-            ApplicationChannelCache.Add("REFINED", 222ul);
-
-            ApplicationChannelCache.Remove(111ul);
-
-            var result = ApplicationChannelCache.Load();
+            var result = SqlClient.Load();
             Assert.Single(result);
             Assert.Equal(222ul, result[0].ChannelId);
         }
