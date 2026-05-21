@@ -21,10 +21,9 @@ public class Program
     private static readonly RaidBotsClient RaidBotsClient = new();
     private static readonly RealmClient RealmClient = new();
     private static readonly RefinedClient RefinedClient = new();
+    private static readonly DiscordClient _discordClient = new();
     private static GoogleSheetsClient GoogleSheetsClient;
     private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
-    private static readonly string ChannelCacheFile = Path.Combine(AppContext.BaseDirectory, "app-channels.json");
-    private record AppChannelEntry(string GuildName, ulong ChannelId);
     // private static AiClient AiClient;
 
     public static async Task Main()
@@ -42,6 +41,8 @@ public class Program
         };
 
         AppSettings.Initialize();
+        ApplicationChannelCache.ConnectionString = AppSettings.MySql.ConnectionString;
+        ApplicationChannelCache.EnsureTable();
         GoogleSheetsClient = new GoogleSheetsClient();
         // AiClient = new();
 
@@ -64,6 +65,7 @@ public class Program
         LogInfo("Bot ready");
         DiscordClient.SendMessageAsync = async (channelId, content) =>
         {
+            if (AppSettings.DryRun) { LogInfo($"[DRY RUN] Send to channel {channelId}: {content}"); return; }
             var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
             if (channel != null)
                 await channel.SendMessageAsync(content);
@@ -105,37 +107,9 @@ public class Program
         await ScheduleCheck();
     }
 
-    private static List<AppChannelEntry> LoadChannelCache()
-    {
-        if (!File.Exists(ChannelCacheFile)) return new();
-        var json = File.ReadAllText(ChannelCacheFile);
-        return System.Text.Json.JsonSerializer.Deserialize<List<AppChannelEntry>>(json) ?? new();
-    }
-
-    private static void SaveChannelCache(List<AppChannelEntry> entries)
-    {
-        var json = System.Text.Json.JsonSerializer.Serialize(entries, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(ChannelCacheFile, json);
-    }
-
-    private static void AddToChannelCache(string guildName, ulong channelId)
-    {
-        var entries = LoadChannelCache();
-        entries.RemoveAll(e => e.ChannelId == channelId);
-        entries.Add(new AppChannelEntry(guildName, channelId));
-        SaveChannelCache(entries);
-    }
-
-    private static void RemoveFromChannelCache(ulong channelId)
-    {
-        var entries = LoadChannelCache();
-        entries.RemoveAll(e => e.ChannelId == channelId);
-        SaveChannelCache(entries);
-    }
-
     private static async Task RestoreTrackedApplicationMessages()
     {
-        var entries = LoadChannelCache();
+        var entries = ApplicationChannelCache.Load();
         var restored = 0;
         foreach (var entry in entries)
         {
@@ -404,9 +378,9 @@ public class Program
 
             if (now.DayOfWeek == DayOfWeek.Tuesday && now.Hour == 17 && now.Minute == 0)
             {
-                await SendDroptimizerReminders();
+                await _discordClient.SendDroptimizerReminders(now);
             }
-            else if (IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && IsGuildActive(g, now)))
+            else if (Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))
             {
                 if (AppSettings.DryRun) LogInfo("[DRY RUN] PostBadPlayers");
                 else await RefinedClient.PostBadPlayers();
@@ -427,67 +401,14 @@ public class Program
         }
     }
 
-    public static bool IsKeyAuditTime(DateTime now) =>
-        (now.DayOfWeek == DayOfWeek.Friday && now.Hour == 20 && now.Minute == 0) ||
-        (now.DayOfWeek == DayOfWeek.Monday && now.Hour == 17 && now.Minute == 0);
-
-    public static bool IsGuildActive(GuildSettings guild, DateTime now) =>
-        (guild.Droptimizer?.StartDate == null || now >= guild.Droptimizer.StartDate.Value) &&
-        (guild.Droptimizer?.EndDate == null || now <= guild.Droptimizer.EndDate.Value);
-
-    private static async Task SendDroptimizerReminders()
-    {
-        LogInfo("Sending droptimizer reminders");
-        var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, TZConvert.GetTimeZoneInfo("Eastern Standard Time"));
-
-        foreach (var guild in AppSettings.Guilds.Where(g => g.Features.DroptimizerReminder && IsGuildActive(g, now)))
-        {
-            var roles = guild.RolesToPing?.Length > 0
-                ? string.Join(" ", guild.RolesToPing.Select(r => $"<@&{r}>")) + " "
-                : "";
-
-            var channelId = guild.Channels?.GetValueOrDefault("droptimizer") ?? 0;
-            if (channelId != 0)
-            {
-                var channel = DiscordBotClient.GetChannel(channelId) as IMessageChannel;
-                if (channel != null)
-                    await SendMessageAsync(channel, $"{roles}Make sure to post droptimizers or you're not getting loot");
-            }
-        }
-
-    }
-
     private static async Task CheckNewApplications()
     {
-        var discordClient = new DiscordClient();
-        var guildsWithApps = AppSettings.Guilds.Where(g =>
-            g.ApplicationSheet != null &&
-            g.Channels?.ContainsKey("applicationsCategory") == true &&
-            g.Channels?.ContainsKey("applicationsOfficer") == true);
-
-        foreach (var guild in guildsWithApps)
+        var tracked = await _discordClient.CheckNewApplications(GoogleSheetsClient);
+        foreach (var t in tracked)
         {
-            var categoryId = guild.Channels["applicationsCategory"];
-            var officerChannelId = guild.Channels["applicationsOfficer"];
-            var archiveCategoryId = guild.Channels.GetValueOrDefault("applicationsArchiveCategory");
-            var applications = await GoogleSheetsClient.ReadApplications(guild.ApplicationSheet);
-            var unposted = applications.Where(a => !a.IsPosted).ToList();
-
-            if (unposted.Count == 0) continue;
-
-            foreach (var app in unposted)
-            {
-                LogInfo($"Posting application row {app.RowIndex} from {app.ContactInfo}");
-                var (channelId, messageIds) = await discordClient.PostApplication(categoryId, officerChannelId, app);
-                foreach (var msgId in messageIds.Where(id => id != 0))
-                {
-                    _trackedApplicationMessages[msgId] = (channelId, archiveCategoryId, guild.DenyUserIds);
-                    AddToChannelCache(guild.Name, channelId);
-                }
-                await GoogleSheetsClient.MarkApplicationAsPosted(guild.ApplicationSheet, app.RowIndex);
-            }
+            _trackedApplicationMessages[t.MessageId] = (t.ChannelId, t.ArchiveCategoryId, t.DenyUserIds);
+            ApplicationChannelCache.Add(t.GuildName, t.ChannelId);
         }
-
     }
 
     private static async Task OnReactionAdded(
@@ -515,33 +436,40 @@ public class Program
         if (archiveCategoryId != 0)
         {
             await textChannel.ModifyAsync(p => p.CategoryId = archiveCategoryId);
-            await textChannel.SyncPermissionsAsync();
+            LogInfo($"Application denied, channel {channelId} moved to archive, syncing permissions");
+
+            var archiveCategory = textChannel.Guild.GetChannel(archiveCategoryId) as SocketCategoryChannel;
+            if (archiveCategory == null)
+            {
+                LogWarn($"Archive category {archiveCategoryId} not found in cache, skipping permission sync");
+            }
+            else
+            {
+                foreach (var overwrite in archiveCategory.PermissionOverwrites)
+                {
+                    if (overwrite.TargetType == PermissionTarget.Role)
+                    {
+                        var role = textChannel.Guild.GetRole(overwrite.TargetId);
+                        if (role != null)
+                            await textChannel.AddPermissionOverwriteAsync(role, overwrite.Permissions);
+                    }
+                    else
+                    {
+                        var user = textChannel.Guild.GetUser(overwrite.TargetId);
+                        if (user != null)
+                            await textChannel.AddPermissionOverwriteAsync(user, overwrite.Permissions);
+                    }
+                }
+                LogInfo($"Permissions synced for channel {channelId} ({archiveCategory.PermissionOverwrites.Count} overwrites applied)");
+            }
+        }
+        else
+        {
+            LogWarn($"Application denied, channel {channelId} has no archive category configured — skipping move and permission sync");
         }
 
         _trackedApplicationMessages.Remove(cachedMessage.Id);
-        RemoveFromChannelCache(channelId);
-        LogInfo($"Application denied, channel {channelId} moved to archive");
+        ApplicationChannelCache.Remove(channelId);
     }
 
-    private static List<string> SplitMessage(string message, int maxLength)
-    {
-        var chunks = new List<string>();
-        var lines = message.Split('\n');
-        var current = new System.Text.StringBuilder();
-
-        foreach (var line in lines)
-        {
-            if (current.Length + line.Length + 1 > maxLength)
-            {
-                chunks.Add(current.ToString().TrimEnd());
-                current.Clear();
-            }
-            current.AppendLine(line);
-        }
-
-        if (current.Length > 0)
-            chunks.Add(current.ToString().TrimEnd());
-
-        return chunks;
-    }
 }
