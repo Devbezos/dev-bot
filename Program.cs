@@ -99,7 +99,38 @@ public class Program
             if (message != null) await message.PinAsync();
         };
 
+        await RestoreTrackedApplicationMessages();
         await ScheduleCheck();
+    }
+
+    private static async Task RestoreTrackedApplicationMessages()
+    {
+        var guildsWithApps = AppSettings.Guilds.Where(g =>
+            g.ApplicationSheet != null &&
+            g.Channels?.ContainsKey("applicationsCategory") == true &&
+            g.Channels?.ContainsKey("applicationsArchiveCategory") == true);
+
+        foreach (var guild in guildsWithApps)
+        {
+            var categoryId = guild.Channels["applicationsCategory"];
+            var archiveCategoryId = guild.Channels["applicationsArchiveCategory"];
+
+            var discordGuild = DiscordBotClient.Guilds
+                .FirstOrDefault(dg => dg.TextChannels.Any(c => c.CategoryId == categoryId));
+            if (discordGuild == null) continue;
+
+            var appChannels = discordGuild.TextChannels.Where(c => c.CategoryId == categoryId).ToList();
+            foreach (var channel in appChannels)
+            {
+                var pins = await channel.GetPinnedMessagesAsync();
+                var pinned = pins.FirstOrDefault();
+                if (pinned != null)
+                {
+                    _trackedApplicationMessages[pinned.Id] = (channel.Id, archiveCategoryId, guild.DenyUserIds);
+                    LogInfo($"Restored tracking: #{channel.Name} (msg {pinned.Id})");
+                }
+            }
+        }
     }
 
     private static async Task OnGuildMemberUpdatedAsync(Cacheable<SocketGuildUser, ulong> before, SocketGuildUser after)
@@ -117,7 +148,6 @@ public class Program
     public static async Task MonitorMessages(SocketMessage message)
     {
         if (message.Author.IsBot) return;
-        LogInfo($"Message from {message.Author.Username} in #{message.Channel.Name}");
 
         //if (message.Author.Id == 341726443295866893)
         //    await ReactAsync(message, new Emoji("🫃"));
@@ -128,6 +158,7 @@ public class Program
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g => g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
         if (matchedGuild != null)
         {
+            LogInfo($"Message from {message.Author.Username} in #{message.Channel.Name}");
             await MonitorDroptimizers(message);
         }
         // else if (message.MentionedUsers.Any(u => u.Username == "Refined Bot") && message.Author.Username != "Refined Bot")
