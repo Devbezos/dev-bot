@@ -440,10 +440,10 @@ public class Program
             await textChannel.ModifyAsync(p => p.CategoryId = archiveCategoryId);
             LogInfo($"Application denied, channel {channelId} moved to archive, syncing permissions");
 
-            var archiveCategory = textChannel.Guild.GetChannel(archiveCategoryId) as SocketCategoryChannel;
+            var archiveCategory = await ((IGuild)textChannel.Guild).GetChannelAsync(archiveCategoryId, CacheMode.AllowDownload);
             if (archiveCategory == null)
             {
-                LogWarn($"Archive category {archiveCategoryId} not found in cache, skipping permission sync");
+                LogWarn($"Archive category {archiveCategoryId} not found, skipping permission sync");
             }
             else
             {
