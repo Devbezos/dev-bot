@@ -17,6 +17,7 @@ using TimeZoneConverter;
 public class Program
 {
     private static DiscordSocketClient DiscordBotClient;
+    private static int _schedulerStarted = 0;
     private static readonly WoWAuditClient WoWAuditClient = new();
     private static readonly RaidBotsClient RaidBotsClient = new();
     private static readonly RealmClient RealmClient = new();
@@ -106,7 +107,8 @@ public class Program
         };
 
         await RestoreTrackedApplicationMessages();
-        await ScheduleCheck();
+        if (Interlocked.Exchange(ref _schedulerStarted, 1) == 0)
+            await ScheduleCheck();
     }
 
     private static async Task RestoreTrackedApplicationMessages()
