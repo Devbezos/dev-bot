@@ -6,11 +6,21 @@ using Discord.WebSocket;
 
 public partial class Program
 {
+    private static DateTime _guildsLastLoadedUtc = DateTime.MinValue;
+    private static readonly TimeSpan GuildCacheTtl = TimeSpan.FromSeconds(30);
+
+    private static void ReloadGuildsIfStale()
+    {
+        if (DateTime.UtcNow - _guildsLastLoadedUtc < GuildCacheTtl) return;
+        AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
+        _guildsLastLoadedUtc = DateTime.UtcNow;
+    }
+
     public static async Task MonitorMessages(SocketMessage message)
     {
         if (message.Author.IsBot) return;
 
-        AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
+        ReloadGuildsIfStale();
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
             g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
@@ -104,8 +114,7 @@ public partial class Program
         {
             await ReactAsync(message, new Emoji("❌"));
             await SendDmAsync(message.Author, "WoWAudit is currently down. Please try again later. Also compliment epic on his tuna can");
-            LogError(ex.Message);
-            throw;
+            LogError($"MonitorDroptimizers failed: {ex}");
         }
     }
 }

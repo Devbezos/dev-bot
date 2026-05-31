@@ -8,6 +8,7 @@ using Discord;
 using Discord.WebSocket;
 using Serilog;
 using Serilog.Events;
+using System.Collections.Concurrent;
 using TimeZoneConverter;
 
 public partial class Program
@@ -21,8 +22,7 @@ public partial class Program
     private static readonly RefinedClient RefinedClient = new();
     private static readonly DiscordClient _discordClient = new();
     private static GoogleSheetsClient GoogleSheetsClient;
-    private static readonly Dictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
-    // private static AiClient AiClient;
+    private static readonly ConcurrentDictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
 
     public static async Task Main()
     {
@@ -46,13 +46,11 @@ public partial class Program
         GuildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
         GoogleSheetsClient = new GoogleSheetsClient();
-        // AiClient = new();
 
         DiscordBotClient = new DiscordSocketClient(discordConfig);
         DiscordBotClient.Log += Log;
         DiscordBotClient.Ready += OnReady;
         DiscordBotClient.MessageReceived += MonitorMessages;
-        DiscordBotClient.GuildMemberUpdated += OnGuildMemberUpdatedAsync;
         DiscordBotClient.ReactionAdded += OnReactionAdded;
 
         await DiscordBotClient.LoginAsync(TokenType.Bot, AppSettings.Discord.Token);
@@ -108,18 +106,6 @@ public partial class Program
         await RestoreTrackedApplicationMessages();
         if (Interlocked.Exchange(ref _schedulerStarted, 1) == 0)
             await ScheduleCheck();
-    }
-
-    private static async Task OnGuildMemberUpdatedAsync(Cacheable<SocketGuildUser, ulong> before, SocketGuildUser after)
-    {
-        // if (before.Id != 496045399321083915) return;
-
-        // var beforeUser = await before.GetOrDownloadAsync();
-        // if (beforeUser.AvatarId == after.AvatarId) return;
-
-        // var channel = DiscordBotClient.GetChannel(840082901890629644) as IMessageChannel;
-        // Console.WriteLine("She did it!");
-        // await SendMessageAsync(channel, "<@496045399321083915> :eyes:");
     }
 
     private static Task Log(LogMessage msg)

@@ -15,6 +15,7 @@ public partial class Program
         {
             // Reload guild config from DB each tick so UI changes take effect without a restart
             AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
+            _guildsLastLoadedUtc = DateTime.UtcNow;
 
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
 

@@ -95,7 +95,7 @@ public partial class Program
             LogWarn($"Application denied, channel {channelId} has no archive category configured — skipping move and permission sync");
         }
 
-        _trackedApplicationMessages.Remove(cachedMessage.Id);
+        _trackedApplicationMessages.TryRemove(cachedMessage.Id, out _);
         SqlClient.Remove(channelId);
     }
 }
