@@ -21,6 +21,7 @@ public class Program
     private static DiscordSocketClient DiscordBotClient;
     private static int _schedulerStarted = 0;
     private static readonly WoWAuditClient WoWAuditClient = new();
+    private static readonly WoWUtilsClient WoWUtilsClient = new();
     private static readonly RaidBotsClient RaidBotsClient = new();
     private static readonly RealmClient RealmClient = new();
     private static readonly RefinedClient RefinedClient = new();
@@ -212,13 +213,34 @@ public class Program
                 var reportId = raidBotsUrl.Split('/').Last();
                 LogInfo($"Processing {raidBotsUrl}");
 
-                var response = await WoWAuditClient.UpdateWishlist(reportId, guild.Name);
+                var isWoWUtils = guild.Droptimizer?.Source?.Equals("wowutils", StringComparison.OrdinalIgnoreCase) == true;
 
-                if (!bool.Parse(response.Created))
+                if (isWoWUtils)
                 {
-                    await SendDmAsync(message.Author, $"You did not send a valid droptimizer {response.Base[0]}");
-                    await DeleteAsync(message);
-                    return;
+                    var report = await WoWUtilsClient.GetDroptimizerReport(reportId);
+                    var characterSlug = WoWUtilsClient.GetCharacterSlug(report);
+                    var importResult = await WoWUtilsClient.ImportDroptimizer(
+                        guild.Droptimizer.GroupId, characterSlug, report, reportId, guild.Droptimizer.SessionCookie);
+
+                    if (importResult?.Import == null)
+                    {
+                        await SendDmAsync(message.Author, "Failed to import your droptimizer to WoW Utils. Please try again.");
+                        await DeleteAsync(message);
+                        return;
+                    }
+
+                    LogInfo($"WoW Utils import successful: {importResult.Import.Id} for {importResult.Import.CharacterName} ({importResult.Import.CharacterSpec})");
+                }
+                else
+                {
+                    var response = await WoWAuditClient.UpdateWishlist(reportId, guild.Name);
+
+                    if (!bool.Parse(response.Created))
+                    {
+                        await SendDmAsync(message.Author, $"You did not send a valid droptimizer {response.Base[0]}");
+                        await DeleteAsync(message);
+                        return;
+                    }
                 }
 
                 var validGoogleSheetsReport = await RaidBotsClient.IsValidReport(raidBotsUrl);
