@@ -396,35 +396,41 @@ public class Program
             var credsByUsername = FitnessRepository.GetGoogleHealthSettings()
                 .Where(u => !string.IsNullOrEmpty(u.RefreshToken))
                 .ToDictionary(u => u.Username);
-            var fitnessNames = new[] { Constants.Jobs.FitnessDaily, Constants.Jobs.FitnessWeekly };
+
+            var fitnessDaily  = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.FitnessDaily);
+            var fitnessWeekly = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.FitnessWeekly);
+
+            if (fitnessDaily != null && JobRepository.ShouldRunToday(fitnessDaily, now, eastern))
+            {
+                foreach (var dbUser in fitnessUsers)
+                {
+                    if (!credsByUsername.TryGetValue(dbUser.Username, out var dailyCreds)) continue;
+                    dailyCreds.ChannelId = dbUser.ChannelId;
+                    try { await new GoogleHealthClient(dailyCreds).PostDailyFitnessStats(); }
+                    catch (Exception ex) { LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}"); }
+                }
+                JobRepository.MarkRan(fitnessDaily.Name);
+            }
+
+            if (fitnessWeekly != null && JobRepository.ShouldRunThisWeek(fitnessWeekly, now, eastern))
+            {
+                foreach (var dbUser in fitnessUsers)
+                {
+                    if (!credsByUsername.TryGetValue(dbUser.Username, out var weeklyCreds)) continue;
+                    weeklyCreds.ChannelId = dbUser.ChannelId;
+                    try { await new GoogleHealthClient(weeklyCreds).PostWeeklyFitnessStats(); }
+                    catch (Exception ex) { LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}"); }
+                }
+                JobRepository.MarkRan(fitnessWeekly.Name);
+            }
+
             foreach (var job in jobs.Where(j =>
-                JobRepository.ShouldRun(j, now) ||
-                (fitnessNames.Contains(j.Name) && JobRepository.ShouldRunCatchUp(j, now, eastern))))
+                j.Name != Constants.Jobs.FitnessDaily &&
+                j.Name != Constants.Jobs.FitnessWeekly &&
+                JobRepository.ShouldRun(j, now)))
             {
                 switch (job.Name)
                 {
-                    case Constants.Jobs.FitnessDaily:
-                        foreach (var dbUser in fitnessUsers)
-                        {
-                            if (!credsByUsername.TryGetValue(dbUser.Username, out var dailyCreds)) continue;
-                            dailyCreds.ChannelId = dbUser.ChannelId;
-                            try { await new GoogleHealthClient(dailyCreds).PostDailyFitnessStats(); }
-                            catch (Exception ex) { LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}"); }
-                        }
-                        JobRepository.MarkRan(job.Name);
-                        break;
-
-                    case Constants.Jobs.FitnessWeekly:
-                        foreach (var dbUser in fitnessUsers)
-                        {
-                            if (!credsByUsername.TryGetValue(dbUser.Username, out var weeklyCreds)) continue;
-                            weeklyCreds.ChannelId = dbUser.ChannelId;
-                            try { await new GoogleHealthClient(weeklyCreds).PostWeeklyFitnessStats(); }
-                            catch (Exception ex) { LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}"); }
-                        }
-                        JobRepository.MarkRan(job.Name);
-                        break;
-
                     case Constants.Jobs.DroptimizerReminder:
                         await _discordClient.SendDroptimizerReminders(now);
                         JobRepository.MarkRan(job.Name);
