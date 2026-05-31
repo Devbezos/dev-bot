@@ -1,12 +1,11 @@
 using dev_library.Clients.Fitness;
 using dev_library.Data;
-using dev_library.Data.Discord;
 using dev_library.Data.Fitness;
 using TimeZoneConverter;
 
-public partial class Program
+public partial class BotService
 {
-    private static async Task ScheduleCheck()
+    private async Task ScheduleCheck()
     {
         LogInfo("Scheduler started");
         var eastern = TZConvert.GetTimeZoneInfo("Eastern Standard Time");
@@ -14,19 +13,19 @@ public partial class Program
         while (true)
         {
             // Reload guild config from DB each tick so UI changes take effect without a restart
-            AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
+            AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
             _guildsLastLoadedUtc = DateTime.UtcNow;
 
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
 
-            var jobs = JobRepository.GetAll();
+            var jobs = _jobRepository.GetAll();
             var globalEnabled = jobs.ToDictionary(j => j.Name, j => j.Enabled);
 
             if (globalEnabled.GetValueOrDefault(Constants.Jobs.ServerAvailability, true))
             {
                 try
                 {
-                    await RealmClient.PostServerAvailability();
+                    await _realmClient.PostServerAvailability();
                 }
                 catch (Exception ex)
                 {
@@ -34,15 +33,15 @@ public partial class Program
                 }
             }
 
-            var fitnessUsers = FitnessRepository.GetUsers();
-            var credsByUsername = FitnessRepository.GetGoogleHealthSettings()
+            var fitnessUsers = _fitnessRepository.GetUsers();
+            var credsByUsername = _fitnessRepository.GetGoogleHealthSettings()
                 .Where(u => !string.IsNullOrEmpty(u.RefreshToken))
                 .ToDictionary(u => u.Username);
 
             var fitnessDaily  = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.FitnessDaily);
             var fitnessWeekly = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.FitnessWeekly);
 
-            if (fitnessDaily != null && JobRepository.ShouldRunToday(fitnessDaily, now, eastern))
+            if (fitnessDaily != null && _jobRepository.ShouldRunToday(fitnessDaily, now, eastern))
             {
                 foreach (var dbUser in fitnessUsers)
                 {
@@ -51,10 +50,10 @@ public partial class Program
                     try { await new GoogleHealthClient(dailyCreds).PostDailyFitnessStats(); }
                     catch (Exception ex) { LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}"); }
                 }
-                JobRepository.MarkRan(fitnessDaily.Name);
+                _jobRepository.MarkRan(fitnessDaily.Name);
             }
 
-            if (fitnessWeekly != null && JobRepository.ShouldRunThisWeek(fitnessWeekly, now, eastern))
+            if (fitnessWeekly != null && _jobRepository.ShouldRunThisWeek(fitnessWeekly, now, eastern))
             {
                 foreach (var dbUser in fitnessUsers)
                 {
@@ -63,19 +62,19 @@ public partial class Program
                     try { await new GoogleHealthClient(weeklyCreds).PostWeeklyFitnessStats(); }
                     catch (Exception ex) { LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}"); }
                 }
-                JobRepository.MarkRan(fitnessWeekly.Name);
+                _jobRepository.MarkRan(fitnessWeekly.Name);
             }
 
             foreach (var job in jobs.Where(j =>
                 j.Name != Constants.Jobs.FitnessDaily &&
                 j.Name != Constants.Jobs.FitnessWeekly &&
-                JobRepository.ShouldRun(j, now)))
+                _jobRepository.ShouldRun(j, now)))
             {
                 switch (job.Name)
                 {
                     case Constants.Jobs.DroptimizerReminder:
                         await _discordClient.SendDroptimizerReminders(now);
-                        JobRepository.MarkRan(job.Name);
+                        _jobRepository.MarkRan(job.Name);
                         break;
                 }
             }
@@ -84,7 +83,7 @@ public partial class Program
                 && Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))
             {
                 if (AppSettings.DryRun) LogInfo("[DRY RUN] PostBadPlayers");
-                else await RefinedClient.PostBadPlayers();
+                else await _refinedClient.PostBadPlayers();
             }
 
             try

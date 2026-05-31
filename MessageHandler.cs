@@ -1,22 +1,23 @@
+using dev_library;
 using dev_library.Data;
 using dev_library.Data.Discord;
 using dev_library.Data.WoW.Raidbots;
 using Discord;
 using Discord.WebSocket;
 
-public partial class Program
+public partial class BotService
 {
-    private static DateTime _guildsLastLoadedUtc = DateTime.MinValue;
+    private DateTime _guildsLastLoadedUtc = DateTime.MinValue;
     private static readonly TimeSpan GuildCacheTtl = TimeSpan.FromSeconds(30);
 
-    private static void ReloadGuildsIfStale()
+    private void ReloadGuildsIfStale()
     {
         if (DateTime.UtcNow - _guildsLastLoadedUtc < GuildCacheTtl) return;
-        AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
+        AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _guildsLastLoadedUtc = DateTime.UtcNow;
     }
 
-    public static async Task MonitorMessages(SocketMessage message)
+    public async Task MonitorMessages(SocketMessage message)
     {
         if (message.Author.IsBot) return;
 
@@ -32,7 +33,7 @@ public partial class Program
         }
     }
 
-    public static async Task MonitorDroptimizers(SocketMessage message)
+    public async Task MonitorDroptimizers(SocketMessage message)
     {
         LogInfo($"Processing message from {message.Author.Username} in #{message.Channel.Name}");
         var raidBotsUrls = Helpers.ExtractUrls(message.Content);
@@ -63,9 +64,9 @@ public partial class Program
 
                 if (isWoWUtils)
                 {
-                    var report = await WoWUtilsClient.GetDroptimizerReport(reportId);
-                    var characterSlug = WoWUtilsClient.GetCharacterSlug(report);
-                    var importResult = await WoWUtilsClient.ImportDroptimizer(
+                    var report = await _wowUtilsClient.GetDroptimizerReport(reportId);
+                    var characterSlug = _wowUtilsClient.GetCharacterSlug(report);
+                    var importResult = await _wowUtilsClient.ImportDroptimizer(
                         guild.Droptimizer.GroupId, characterSlug, report, reportId, guild.Droptimizer.SessionCookie);
 
                     if (importResult?.Import == null)
@@ -79,7 +80,7 @@ public partial class Program
                 }
                 else
                 {
-                    var response = await WoWAuditClient.UpdateWishlist(reportId, guild.Name);
+                    var response = await _wowAuditClient.UpdateWishlist(reportId, guild.Name);
 
                     if (!bool.Parse(response.Created))
                     {
@@ -89,15 +90,15 @@ public partial class Program
                     }
                 }
 
-                var validGoogleSheetsReport = await RaidBotsClient.IsValidReport(raidBotsUrl);
+                var validGoogleSheetsReport = await _raidBotsClient.IsValidReport(raidBotsUrl);
                 if (guild.Name == "REFINED" && validGoogleSheetsReport)
                 {
-                    itemUpgrades = await RaidBotsClient.GetItemUpgrades(itemUpgrades, reportId);
+                    itemUpgrades = await _raidBotsClient.GetItemUpgrades(itemUpgrades, reportId);
                 }
             }
 
             if (itemUpgrades.Count > 0)
-                await GoogleSheetsClient.UpdateSheet(itemUpgrades);
+                await _googleSheetsClient.UpdateSheet(itemUpgrades);
 
             await ReactAsync(message, new Emoji("✅"));
 

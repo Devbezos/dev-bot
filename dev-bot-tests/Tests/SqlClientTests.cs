@@ -6,12 +6,13 @@ namespace dev_bot_tests.Tests
     public class SqlClientTests : IDisposable
     {
         private const string TestConnectionString = "Server=localhost;Port=3306;Database=dev_bot_test;Uid=root;Pwd=;";
+        private readonly SqlClient _client;
 
         public SqlClientTests()
         {
             EnsureTestDatabase();
-            SqlClient.ConnectionString = TestConnectionString;
-            SqlClient.EnsureTable();
+            _client = new SqlClient(TestConnectionString);
+            _client.EnsureTable();
             ClearTable();
         }
 
@@ -40,7 +41,7 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Load_EmptyTable_ReturnsEmptyList()
         {
-            var result = SqlClient.Load();
+            var result = _client.Load();
 
             Assert.Empty(result);
         }
@@ -48,9 +49,9 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Load_WithRows_ReturnsEntries()
         {
-            SqlClient.Add("REFORGED", 123456789ul);
+            _client.Add("REFORGED", 123456789ul);
 
-            var result = SqlClient.Load();
+            var result = _client.Load();
 
             Assert.Single(result);
             Assert.Equal("REFORGED", result[0].GuildName);
@@ -60,10 +61,10 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Load_MultipleRows_ReturnsAll()
         {
-            SqlClient.Add("REFORGED", 111ul);
-            SqlClient.Add("REFINED", 222ul);
+            _client.Add("REFORGED", 111ul);
+            _client.Add("REFINED", 222ul);
 
-            var result = SqlClient.Load();
+            var result = _client.Load();
 
             Assert.Equal(2, result.Count);
         }
@@ -73,9 +74,9 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Add_NewEntry_IsPersisted()
         {
-            SqlClient.Add("REFORGED", 111ul);
+            _client.Add("REFORGED", 111ul);
 
-            var result = SqlClient.Load();
+            var result = _client.Load();
 
             Assert.Single(result);
             Assert.Equal("REFORGED", result[0].GuildName);
@@ -85,10 +86,10 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Add_DuplicateChannelId_ReplacesExisting()
         {
-            SqlClient.Add("REFORGED", 111ul);
-            SqlClient.Add("REFINED", 111ul);
+            _client.Add("REFORGED", 111ul);
+            _client.Add("REFINED", 111ul);
 
-            var result = SqlClient.Load();
+            var result = _client.Load();
 
             Assert.Single(result);
             Assert.Equal("REFINED", result[0].GuildName);
@@ -98,10 +99,10 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Add_MultipleEntries_AllPersisted()
         {
-            SqlClient.Add("REFORGED", 111ul);
-            SqlClient.Add("REFINED", 222ul);
+            _client.Add("REFORGED", 111ul);
+            _client.Add("REFINED", 222ul);
 
-            var result = SqlClient.Load();
+            var result = _client.Load();
 
             Assert.Equal(2, result.Count);
         }
@@ -111,33 +112,33 @@ namespace dev_bot_tests.Tests
         [Fact]
         public void Remove_ExistingEntry_IsRemoved()
         {
-            SqlClient.Add("REFORGED", 111ul);
+            _client.Add("REFORGED", 111ul);
 
-            SqlClient.Remove(111ul);
+            _client.Remove(111ul);
 
-            Assert.Empty(SqlClient.Load());
+            Assert.Empty(_client.Load());
         }
 
         [Fact]
         public void Remove_NonExistentChannelId_DoesNotThrow()
         {
-            SqlClient.Add("REFORGED", 111ul);
+            _client.Add("REFORGED", 111ul);
 
-            var ex = Record.Exception(() => SqlClient.Remove(999ul));
+            var ex = Record.Exception(() => _client.Remove(999ul));
 
             Assert.Null(ex);
-            Assert.Single(SqlClient.Load());
+            Assert.Single(_client.Load());
         }
 
         [Fact]
         public void Remove_OnlyRemovesMatchingChannelId()
         {
-            SqlClient.Add("REFORGED", 111ul);
-            SqlClient.Add("REFINED", 222ul);
+            _client.Add("REFORGED", 111ul);
+            _client.Add("REFINED", 222ul);
 
-            SqlClient.Remove(111ul);
+            _client.Remove(111ul);
 
-            var result = SqlClient.Load();
+            var result = _client.Load();
             Assert.Single(result);
             Assert.Equal(222ul, result[0].ChannelId);
         }

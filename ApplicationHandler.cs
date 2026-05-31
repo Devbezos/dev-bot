@@ -1,26 +1,27 @@
+using dev_library;
 using dev_library.Data;
 using dev_library.Data.Discord;
 using Discord;
 using Discord.WebSocket;
 
-public partial class Program
+public partial class BotService
 {
-    private static async Task RestoreTrackedApplicationMessages()
+    private async Task RestoreTrackedApplicationMessages()
     {
-        var entries = SqlClient.Load();
+        var entries = _appChannelRepository.Load();
         var restored = 0;
         foreach (var entry in entries)
         {
             var guild = AppSettings.Guilds.FirstOrDefault(g => g.Name == entry.GuildName);
             if (guild == null) continue;
             var archiveCategoryId = guild.Channels?.GetValueOrDefault("applicationsArchiveCategory") ?? 0;
-            var channel = DiscordBotClient.GetChannel(entry.ChannelId) as SocketTextChannel;
+            var channel = _discordBotClient.GetChannel(entry.ChannelId) as SocketTextChannel;
             if (channel == null) continue;
             // Backfill channel name if not yet stored
             if (string.IsNullOrEmpty(entry.ChannelName))
-                SqlClient.Add(entry.GuildName, entry.ChannelId, channel.Name);
+                _appChannelRepository.Add(entry.GuildName, entry.ChannelId, channel.Name);
             var pins = await channel.GetPinnedMessagesAsync();
-            var pinned = pins.FirstOrDefault(m => m.Author.Id == DiscordBotClient.CurrentUser.Id);
+            var pinned = pins.FirstOrDefault(m => m.Author.Id == _discordBotClient.CurrentUser.Id);
             if (pinned == null) continue;
             _trackedApplicationMessages[pinned.Id] = (entry.ChannelId, archiveCategoryId, guild.DenyUserIds);
             restored++;
@@ -28,17 +29,17 @@ public partial class Program
         LogInfo($"Restored {restored}/{entries.Count} tracked application channel(s) from cache");
     }
 
-    private static async Task CheckNewApplications()
+    private async Task CheckNewApplications()
     {
-        var tracked = await _discordClient.CheckNewApplications(GoogleSheetsClient);
+        var tracked = await _discordClient.CheckNewApplications(_googleSheetsClient);
         foreach (var t in tracked)
         {
             _trackedApplicationMessages[t.MessageId] = (t.ChannelId, t.ArchiveCategoryId, t.DenyUserIds);
-            SqlClient.Add(t.GuildName, t.ChannelId, t.ChannelName);
+            _appChannelRepository.Add(t.GuildName, t.ChannelId, t.ChannelName);
         }
     }
 
-    private static async Task OnReactionAdded(
+    private async Task OnReactionAdded(
         Cacheable<IUserMessage, ulong> cachedMessage,
         Cacheable<IMessageChannel, ulong> cachedChannel,
         SocketReaction reaction)
@@ -57,7 +58,7 @@ public partial class Program
 
         if (xCount < 1) return;
 
-        var textChannel = DiscordBotClient.GetChannel(channelId) as SocketTextChannel;
+        var textChannel = _discordBotClient.GetChannel(channelId) as SocketTextChannel;
         if (textChannel == null) return;
 
         if (archiveCategoryId != 0)
@@ -96,6 +97,6 @@ public partial class Program
         }
 
         _trackedApplicationMessages.TryRemove(cachedMessage.Id, out _);
-        SqlClient.Remove(channelId);
+        _appChannelRepository.Remove(channelId);
     }
 }
