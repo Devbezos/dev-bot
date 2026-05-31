@@ -396,7 +396,10 @@ public class Program
             var credsByUsername = FitnessRepository.GetGoogleHealthSettings()
                 .Where(u => !string.IsNullOrEmpty(u.RefreshToken))
                 .ToDictionary(u => u.Username);
-            foreach (var job in jobs.Where(j => JobRepository.ShouldRun(j, now)))
+            var fitnessNames = new[] { Constants.Jobs.FitnessDaily, Constants.Jobs.FitnessWeekly };
+            foreach (var job in jobs.Where(j =>
+                JobRepository.ShouldRun(j, now) ||
+                (fitnessNames.Contains(j.Name) && JobRepository.ShouldRunCatchUp(j, now, eastern))))
             {
                 switch (job.Name)
                 {
