@@ -375,18 +375,23 @@ public class Program
             // Reload guild config from DB each tick so UI changes take effect without a restart
             AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
 
-            try
-            {
-                await RealmClient.PostServerAvailability();
-            }
-            catch (Exception ex)
-            {
-                LogError($"PostServerAvailability failed: {ex.Message}");
-            }
-
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
 
             var jobs = JobRepository.GetAll();
+            var globalEnabled = jobs.ToDictionary(j => j.Name, j => j.Enabled);
+
+            if (globalEnabled.GetValueOrDefault(Constants.Jobs.ServerAvailability, true))
+            {
+                try
+                {
+                    await RealmClient.PostServerAvailability();
+                }
+                catch (Exception ex)
+                {
+                    LogError($"PostServerAvailability failed: {ex.Message}");
+                }
+            }
+
             var fitnessUsers = FitnessRepository.GetUsers();
             var credsByUsername = FitnessRepository.GetGoogleHealthSettings()
                 .Where(u => !string.IsNullOrEmpty(u.RefreshToken))
@@ -424,7 +429,8 @@ public class Program
                 }
             }
 
-            if (Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))
+            if (globalEnabled.GetValueOrDefault(Constants.Jobs.KeyAudit, true)
+                && Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))
             {
                 if (AppSettings.DryRun) LogInfo("[DRY RUN] PostBadPlayers");
                 else await RefinedClient.PostBadPlayers();
