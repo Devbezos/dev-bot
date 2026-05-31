@@ -1,7 +1,9 @@
 
 using dev_library.Clients;
+using dev_library.Clients.Fitness;
 using dev_library.Data;
 using dev_library.Data.Discord;
+using dev_library.Data.Fitness;
 using dev_library.Data.WoW.Raidbots;
 using dev_refined;
 using dev_refined.Clients;
@@ -29,9 +31,11 @@ public class Program
 
     public static async Task Main()
     {
+        var logTemplate = "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}";
         Serilog.Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
-            .WriteTo.Console(outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
+            .WriteTo.Console(outputTemplate: logTemplate)
+            .WriteTo.File("logs/bot-.log", rollingInterval: Serilog.RollingInterval.Day, outputTemplate: logTemplate)
             .CreateLogger();
 
         LogInfo("Starting");
@@ -122,6 +126,9 @@ public class Program
             var archiveCategoryId = guild.Channels?.GetValueOrDefault("applicationsArchiveCategory") ?? 0;
             var channel = DiscordBotClient.GetChannel(entry.ChannelId) as SocketTextChannel;
             if (channel == null) continue;
+            // Backfill channel name if not yet stored
+            if (string.IsNullOrEmpty(entry.ChannelName))
+                SqlClient.Add(entry.GuildName, entry.ChannelId, channel.Name);
             var pins = await channel.GetPinnedMessagesAsync();
             var pinned = pins.FirstOrDefault(m => m.Author.Id == DiscordBotClient.CurrentUser.Id);
             if (pinned == null) continue;
@@ -147,11 +154,7 @@ public class Program
     {
         if (message.Author.IsBot) return;
 
-        //if (message.Author.Id == 341726443295866893)
-        //    await ReactAsync(message, new Emoji("🫃"));
-
-        // if (message.Author.Id == 442395385403801600)
-            // await ReactAsync(message, Emote.Parse("<:quell:1498755317700493414>"));
+        AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g => g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
         if (matchedGuild != null)
@@ -369,6 +372,9 @@ public class Program
 
         while (true)
         {
+            // Reload guild config from DB each tick so UI changes take effect without a restart
+            AppSettings.Guilds = GuildRepository.LoadAsGuildSettings();
+
             try
             {
                 await RealmClient.PostServerAvailability();
@@ -380,11 +386,45 @@ public class Program
 
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
 
-            if (now.DayOfWeek == DayOfWeek.Tuesday && now.Hour == 17 && now.Minute == 0)
+            var jobs = JobRepository.GetAll();
+            var fitnessUsers = FitnessRepository.GetUsers();
+            var credsByUsername = FitnessRepository.GetGoogleHealthSettings()
+                .Where(u => !string.IsNullOrEmpty(u.RefreshToken))
+                .ToDictionary(u => u.Username);
+            foreach (var job in jobs.Where(j => JobRepository.ShouldRun(j, now)))
             {
-                await _discordClient.SendDroptimizerReminders(now);
+                switch (job.Name)
+                {
+                    case Constants.Jobs.FitnessDaily:
+                        foreach (var dbUser in fitnessUsers)
+                        {
+                            if (!credsByUsername.TryGetValue(dbUser.Username, out var dailyCreds)) continue;
+                            dailyCreds.ChannelId = dbUser.ChannelId;
+                            try { await new GoogleHealthClient(dailyCreds).PostDailyFitnessStats(); }
+                            catch (Exception ex) { LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}"); }
+                        }
+                        JobRepository.MarkRan(job.Name);
+                        break;
+
+                    case Constants.Jobs.FitnessWeekly:
+                        foreach (var dbUser in fitnessUsers)
+                        {
+                            if (!credsByUsername.TryGetValue(dbUser.Username, out var weeklyCreds)) continue;
+                            weeklyCreds.ChannelId = dbUser.ChannelId;
+                            try { await new GoogleHealthClient(weeklyCreds).PostWeeklyFitnessStats(); }
+                            catch (Exception ex) { LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}"); }
+                        }
+                        JobRepository.MarkRan(job.Name);
+                        break;
+
+                    case Constants.Jobs.DroptimizerReminder:
+                        await _discordClient.SendDroptimizerReminders(now);
+                        JobRepository.MarkRan(job.Name);
+                        break;
+                }
             }
-            else if (Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))
+
+            if (Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))
             {
                 if (AppSettings.DryRun) LogInfo("[DRY RUN] PostBadPlayers");
                 else await RefinedClient.PostBadPlayers();
@@ -411,7 +451,7 @@ public class Program
         foreach (var t in tracked)
         {
             _trackedApplicationMessages[t.MessageId] = (t.ChannelId, t.ArchiveCategoryId, t.DenyUserIds);
-            SqlClient.Add(t.GuildName, t.ChannelId);
+            SqlClient.Add(t.GuildName, t.ChannelId, t.ChannelName);
         }
     }
 

@@ -1,5 +1,6 @@
 # Secrets
 appsettings.json
+scripts/Get-GoogleRefreshToken.ps1
 
 # Runtime cache
 app-channels.json
