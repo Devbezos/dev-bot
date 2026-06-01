@@ -26,6 +26,9 @@ public partial class BotService : BackgroundService
     private readonly IJobRepository _jobRepository;
     private readonly ITcgRepository _tcgRepository;
     private readonly ITcgSourceUrlRepository _tcgSourceUrlRepository;
+    private readonly ITcgHiddenItemRepository _tcgHiddenItemRepository;
+    private readonly ITcgChannelSettingsRepository _tcgChannelSettingsRepository;
+    private readonly ITcgFilterSettingsRepository _tcgFilterSettingsRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private int _schedulerStarted = 0;
     private readonly ConcurrentDictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
@@ -44,6 +47,9 @@ public partial class BotService : BackgroundService
         IJobRepository jobRepository,
         ITcgRepository tcgRepository,
         ITcgSourceUrlRepository tcgSourceUrlRepository,
+        ITcgHiddenItemRepository tcgHiddenItemRepository,
+        ITcgChannelSettingsRepository tcgChannelSettingsRepository,
+        ITcgFilterSettingsRepository tcgFilterSettingsRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -59,6 +65,9 @@ public partial class BotService : BackgroundService
         _jobRepository       = jobRepository;
         _tcgRepository       = tcgRepository;
         _tcgSourceUrlRepository = tcgSourceUrlRepository;
+        _tcgHiddenItemRepository = tcgHiddenItemRepository;
+        _tcgChannelSettingsRepository = tcgChannelSettingsRepository;
+        _tcgFilterSettingsRepository = tcgFilterSettingsRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -72,6 +81,12 @@ public partial class BotService : BackgroundService
         _fitnessRepository.EnsureUsersTable(AppSettings.GoogleHealth);
         _jobRepository.EnsureTable();
         _tcgSourceUrlRepository.EnsureTable();
+        _tcgHiddenItemRepository.EnsureTable();
+        _tcgChannelSettingsRepository.EnsureTable();
+        _tcgChannelSettingsRepository.EnsureDefault("pokemon", AppSettings.PokemonTcg.ChannelId);
+        _tcgChannelSettingsRepository.EnsureDefault("gundam", AppSettings.GundamTcg.ChannelId);
+        _tcgFilterSettingsRepository.EnsureTable();
+        _tcgFilterSettingsRepository.EnsureDefault("pokemon", TcgFilterSettingsRepository.DefaultPokemonTerms);
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
 
@@ -136,11 +151,7 @@ public partial class BotService : BackgroundService
             if (channel == null) return;
             var message = await channel.GetMessageAsync(messageId) as IUserMessage;
             if (message != null)
-                await message.ModifyAsync(p =>
-                {
-                    p.Content = null;
-                    p.Embed = embed;
-                });
+                await message.ModifyAsync(p => p.Embed = embed);
         };
 
         DiscordClient.GetLatestBotMessageIdAsync = async (channelId) =>

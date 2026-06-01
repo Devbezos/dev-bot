@@ -2,18 +2,50 @@ using dev_library.Clients;
 using dev_library.Clients.Fitness;
 using dev_library.Data;
 using dev_library.Data.Fitness;
+using System.Text.RegularExpressions;
 using TimeZoneConverter;
 
 public partial class BotService
 {
-    private const ulong PokemonTcgChannelId = 1338230953390112830;
-    private const ulong GundamTcgChannelId = 1511077909647982762;
+    private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static string NormalizeStore(string store) => store.Replace(" 💸 Expensive", "", StringComparison.Ordinal).Trim();
+
+    private static bool IsMainResult(string game, Search search, Product product, IReadOnlyList<string> pokemonMainTerms)
+    {
+        if (search.Store.Contains("💸", StringComparison.Ordinal)) return false;
+        if (LanguageRegex.IsMatch(product.Name)) return false;
+        if (!game.Equals("pokemon", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var lower = product.Name.ToLowerInvariant();
+        return pokemonMainTerms.Any(t => lower.Contains(t));
+    }
+
+    private List<Search> ApplyDiscordFilters(string game, List<Search> results)
+    {
+        var pokemonMainTerms = _tcgFilterSettingsRepository.GetTerms("pokemon");
+        var hidden = _tcgHiddenItemRepository.GetAll(game)
+            .Select(h => $"{NormalizeStore(h.Store)}||{h.ProductName}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var output = new List<Search>();
+        foreach (var s in results)
+        {
+            var store = NormalizeStore(s.Store);
+            var products = s.Products
+                .Where(p => IsMainResult(game, s, p, pokemonMainTerms))
+                .Where(p => !hidden.Contains($"{store}||{p.Name}"))
+                .ToList();
+            if (products.Count > 0)
+                output.Add(new Search(s.Keyword, store, products));
+        }
+        return output;
+    }
 
     private async Task ScheduleCheck()
     {
         LogInfo("Scheduler started");
         var eastern = TZConvert.GetTimeZoneInfo("Eastern Standard Time");
-        var runTcgImmediately = true;
 
         while (true)
         {
@@ -77,7 +109,7 @@ public partial class BotService
             var utcNow = DateTime.UtcNow;
             bool ShouldRunHourly(ScheduledJob job) =>
                 job.Enabled &&
-                (runTcgImmediately || job.LastRun == null || (utcNow - job.LastRun.Value).TotalMinutes >= 60);
+                (job.LastRun == null || (utcNow - job.LastRun.Value).TotalMinutes >= 60);
 
             var pokemonJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonTcg);
             if (pokemonJob != null && ShouldRunHourly(pokemonJob))
@@ -110,7 +142,19 @@ public partial class BotService
                 }
 
                 var filtered = PokemonPriceFilter.Apply(tcgResults);
-                await _discordClient.PostWebHook(PokemonTcgChannelId, filtered);
+                var discordFiltered = ApplyDiscordFilters("pokemon", filtered);
+                var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
+                try
+                {
+                    if (pokemonChannelId != 0)
+                        await _discordClient.PostWebHook(pokemonChannelId, discordFiltered);
+                    else
+                        LogWarn("Pokemon TCG channel is not configured; skipping Discord post");
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Pokemon TCG post failed for channel {pokemonChannelId}: {ex.Message}");
+                }
                 if (filtered.Any())
                     _tcgRepository.SaveResults(DateTime.UtcNow, filtered, "pokemon");
                 _jobRepository.MarkRan(Constants.Jobs.PokemonTcg);
@@ -142,7 +186,19 @@ public partial class BotService
                     }
                 }
 
-                await _discordClient.PostWebHook(GundamTcgChannelId, gundamResults);
+                var discordFiltered = ApplyDiscordFilters("gundam", gundamResults);
+                var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
+                try
+                {
+                    if (gundamChannelId != 0)
+                        await _discordClient.PostWebHook(gundamChannelId, discordFiltered);
+                    else
+                        LogWarn("Gundam TCG channel is not configured; skipping Discord post");
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Gundam TCG post failed for channel {gundamChannelId}: {ex.Message}");
+                }
                 if (gundamResults.Any())
                     _tcgRepository.SaveResults(DateTime.UtcNow, gundamResults, "gundam");
                 _jobRepository.MarkRan(Constants.Jobs.GundamTcg);
@@ -182,7 +238,6 @@ public partial class BotService
 
             var delayUntilNextMinute = TimeSpan.FromSeconds(60 - now.Second);
             Console.Write($"\r[{DateTime.Now:HH:mm:ss}] Scheduler idle, next check at {DateTime.Now.Add(delayUntilNextMinute):HH:mm:ss}   ");
-            runTcgImmediately = false;
             await Task.Delay(delayUntilNextMinute);
         }
     }
