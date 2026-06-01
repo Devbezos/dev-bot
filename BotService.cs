@@ -24,6 +24,8 @@ public partial class BotService : BackgroundService
     private readonly IAppChannelRepository _appChannelRepository;
     private readonly IFitnessRepository _fitnessRepository;
     private readonly IJobRepository _jobRepository;
+    private readonly ITcgRepository _tcgRepository;
+    private readonly ITcgSourceUrlRepository _tcgSourceUrlRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private int _schedulerStarted = 0;
     private readonly ConcurrentDictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
@@ -40,6 +42,8 @@ public partial class BotService : BackgroundService
         IAppChannelRepository appChannelRepository,
         IFitnessRepository fitnessRepository,
         IJobRepository jobRepository,
+        ITcgRepository tcgRepository,
+        ITcgSourceUrlRepository tcgSourceUrlRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -53,6 +57,8 @@ public partial class BotService : BackgroundService
         _appChannelRepository = appChannelRepository;
         _fitnessRepository   = fitnessRepository;
         _jobRepository       = jobRepository;
+        _tcgRepository       = tcgRepository;
+        _tcgSourceUrlRepository = tcgSourceUrlRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -65,6 +71,7 @@ public partial class BotService : BackgroundService
         _fitnessRepository.EnsureTable();
         _fitnessRepository.EnsureUsersTable(AppSettings.GoogleHealth);
         _jobRepository.EnsureTable();
+        _tcgSourceUrlRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
 
@@ -89,6 +96,70 @@ public partial class BotService : BackgroundService
             var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
             if (channel != null)
                 await channel.SendMessageAsync(content);
+        };
+
+        DiscordClient.SendMessageWithIdAsync = async (channelId, content) =>
+        {
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] Send (with id) to channel {channelId}: {content}");
+                return 0;
+            }
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) return 0;
+            var message = await channel.SendMessageAsync(content);
+            return message.Id;
+        };
+
+        DiscordClient.EditMessageAsync = async (channelId, messageId, content) =>
+        {
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] Edit message {messageId} in channel {channelId}: {content}");
+                return;
+            }
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) return;
+            var message = await channel.GetMessageAsync(messageId) as IUserMessage;
+            if (message != null)
+                await message.ModifyAsync(p => p.Content = content);
+        };
+
+        DiscordClient.EditEmbedMessageAsync = async (channelId, messageId, embed) =>
+        {
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] Edit embed message {messageId} in channel {channelId}: {embed.Title}");
+                return;
+            }
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) return;
+            var message = await channel.GetMessageAsync(messageId) as IUserMessage;
+            if (message != null)
+                await message.ModifyAsync(p =>
+                {
+                    p.Content = null;
+                    p.Embed = embed;
+                });
+        };
+
+        DiscordClient.GetLatestBotMessageIdAsync = async (channelId) =>
+        {
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null) return null;
+            var currentUserId = _discordBotClient.CurrentUser?.Id;
+            if (currentUserId == null) return null;
+
+            var recent = await channel.GetMessagesAsync(limit: 25).FlattenAsync();
+            var lastBotMessage = recent
+                .OfType<IUserMessage>()
+                .Where(m => m.Author?.Id == currentUserId.Value)
+                .Where(m =>
+                    (!string.IsNullOrWhiteSpace(m.Content) && m.Content.StartsWith(DiscordClient.TcgMessageHeader)) ||
+                    (m.Embeds.Count > 0 && string.Equals(m.Embeds.First().Title, DiscordClient.TcgMessageHeader, StringComparison.Ordinal)))
+                .OrderByDescending(m => m.Timestamp)
+                .FirstOrDefault();
+            return lastBotMessage?.Id;
         };
 
         DiscordClient.SendEmbedAsync = async (channelId, embed) =>

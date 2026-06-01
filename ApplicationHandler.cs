@@ -6,6 +6,8 @@ using Discord.WebSocket;
 
 public partial class BotService
 {
+    private bool _applicationChecksSuppressedByMissingCredentials;
+
     private async Task RestoreTrackedApplicationMessages()
     {
         var entries = _appChannelRepository.Load();
@@ -31,11 +33,36 @@ public partial class BotService
 
     private async Task CheckNewApplications()
     {
-        var tracked = await _discordClient.CheckNewApplications(_googleSheetsClient);
-        foreach (var t in tracked)
+        try
         {
-            _trackedApplicationMessages[t.MessageId] = (t.ChannelId, t.ArchiveCategoryId, t.DenyUserIds);
-            _appChannelRepository.Add(t.GuildName, t.ChannelId, t.ChannelName);
+            var tracked = await _discordClient.CheckNewApplications(_googleSheetsClient);
+            foreach (var t in tracked)
+            {
+                _trackedApplicationMessages[t.MessageId] = (t.ChannelId, t.ArchiveCategoryId, t.DenyUserIds);
+                _appChannelRepository.Add(t.GuildName, t.ChannelId, t.ChannelName);
+            }
+
+            if (_applicationChecksSuppressedByMissingCredentials)
+            {
+                LogInfo("Google Sheets credentials detected again; application checks resumed.");
+                _applicationChecksSuppressedByMissingCredentials = false;
+            }
+        }
+        catch (FileNotFoundException ex)
+        {
+            if (!_applicationChecksSuppressedByMissingCredentials)
+            {
+                LogWarn($"Google Sheets credentials file missing; suppressing application checks until fixed. {ex.Message}");
+                _applicationChecksSuppressedByMissingCredentials = true;
+            }
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            if (!_applicationChecksSuppressedByMissingCredentials)
+            {
+                LogWarn($"Google Sheets credentials directory missing; suppressing application checks until fixed. {ex.Message}");
+                _applicationChecksSuppressedByMissingCredentials = true;
+            }
         }
     }
 

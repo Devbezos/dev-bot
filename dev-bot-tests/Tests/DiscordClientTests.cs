@@ -40,16 +40,6 @@ namespace dev_bot_tests.Tests
         [Fact]
         public async Task PostWebHook_WhenDelegateIsSet_PostsGroupedByStore()
         {
-            AppSettings.Guilds = new[]
-            {
-                new GuildSettings
-                {
-                    Name = "POKEMON",
-                    Channels = new Dictionary<string, ulong> { ["general"] = 777ul },
-                    Features = new GuildFeatures()
-                }
-            };
-
             ulong? postedChannelId = null;
             string? postedMessage = null;
 
@@ -72,7 +62,7 @@ namespace dev_bot_tests.Tests
             };
 
             var sut = new DiscordClient();
-            await sut.PostWebHook(searchResults);
+            await sut.PostWebHook(777ul, searchResults);
 
             Assert.Equal(777ul, postedChannelId);
             Assert.Contains("BestBuy", postedMessage);
