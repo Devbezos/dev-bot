@@ -209,8 +209,8 @@ public partial class BotService
                 job.Enabled &&
                 (job.LastRun == null || (utcNow - job.LastRun.Value).TotalMinutes >= 60);
 
-            var pokemonJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonTcg);
-            if (pokemonJob != null && ShouldRunHourly(pokemonJob))
+            var tcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.Tcg);
+            if (tcgJob != null && ShouldRunHourly(tcgJob))
             {
                 var tcgResults = new List<Search>();
                 await using var browser = await PlaywrightBrowser.CreateAsync();
@@ -263,12 +263,7 @@ public partial class BotService
                         await NotifyNewPokemonProducts(newPokemonProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, filtered, "pokemon");
                 }
-                _jobRepository.MarkRan(Constants.Jobs.PokemonTcg);
-            }
 
-            var gundamJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.GundamTcg);
-            if (gundamJob != null && ShouldRunHourly(gundamJob))
-            {
                 var gundamResults = new List<Search>();
                 var gundamScrapers = new (string Name, Func<Task<List<Search>>> Run)[]
                 {
@@ -292,12 +287,12 @@ public partial class BotService
                     }
                 }
 
-                var discordFiltered = ApplyDiscordFilters("gundam", gundamResults);
+                var gundamDiscordFiltered = ApplyDiscordFilters("gundam", gundamResults);
                 var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
                 try
                 {
                     if (gundamChannelId != 0)
-                        await _discordClient.PostWebHook(gundamChannelId, discordFiltered);
+                        await _discordClient.PostWebHook(gundamChannelId, gundamDiscordFiltered);
                     else
                         LogWarn("Gundam TCG channel is not configured; skipping Discord post");
                 }
@@ -307,14 +302,59 @@ public partial class BotService
                 }
                 if (gundamResults.Any())
                     _tcgRepository.SaveResults(DateTime.UtcNow, gundamResults, "gundam");
-                _jobRepository.MarkRan(Constants.Jobs.GundamTcg);
+
+                var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
+                var preorderResults = new List<Search>();
+
+                try
+                {
+                    LogInfo("Pre-order scrape starting: Pokemon 401Games");
+                    var results = await preorderClient.GetPokemonPreOrders();
+                    var nonEmpty = results.Where(r => r.Products.Any()).ToList();
+                    preorderResults.AddRange(nonEmpty);
+                    LogInfo($"Pre-order scrape finished: Pokemon 401Games — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Pre-order scrape failed: Pokemon 401Games: {ex.Message}");
+                }
+
+                try
+                {
+                    LogInfo("Pre-order scrape starting: Gundam 401Games");
+                    var results = await preorderClient.GetGundamPreOrders();
+                    var nonEmpty = results.Where(r => r.Products.Any()).ToList();
+                    preorderResults.AddRange(nonEmpty);
+                    LogInfo($"Pre-order scrape finished: Gundam 401Games — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Pre-order scrape failed: Gundam 401Games: {ex.Message}");
+                }
+
+                var preorderDiscordFiltered = ApplyDiscordFilters("preorder", preorderResults);
+                var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
+                try
+                {
+                    if (preorderChannelId != 0)
+                        await _discordClient.PostWebHook(preorderChannelId, preorderDiscordFiltered);
+                    else
+                        LogWarn("Pre-order TCG channel is not configured; skipping Discord post");
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Pre-order TCG post failed for channel {preorderChannelId}: {ex.Message}");
+                }
+                if (preorderResults.Any())
+                    _tcgRepository.SaveResults(DateTime.UtcNow, preorderResults, "preorder");
+
+                _jobRepository.MarkRan(Constants.Jobs.Tcg);
             }
 
             foreach (var job in jobs.Where(j =>
                 j.Name != Constants.Jobs.FitnessDaily &&
                 j.Name != Constants.Jobs.FitnessWeekly &&
-                j.Name != Constants.Jobs.PokemonTcg &&
-                j.Name != Constants.Jobs.GundamTcg &&
+                j.Name != Constants.Jobs.Tcg &&
                 _jobRepository.ShouldRun(j, now)))
             {
                 switch (job.Name)
