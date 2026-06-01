@@ -29,6 +29,7 @@ public partial class BotService : BackgroundService
     private readonly ITcgHiddenItemRepository _tcgHiddenItemRepository;
     private readonly ITcgBlacklistWordRepository _tcgBlacklistWordRepository;
     private readonly ITcgChannelSettingsRepository _tcgChannelSettingsRepository;
+    private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private int _schedulerStarted = 0;
     private readonly ConcurrentDictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
@@ -50,6 +51,7 @@ public partial class BotService : BackgroundService
         ITcgHiddenItemRepository tcgHiddenItemRepository,
         ITcgBlacklistWordRepository tcgBlacklistWordRepository,
         ITcgChannelSettingsRepository tcgChannelSettingsRepository,
+        ITcgMessageStateRepository tcgMessageStateRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -68,6 +70,7 @@ public partial class BotService : BackgroundService
         _tcgHiddenItemRepository = tcgHiddenItemRepository;
         _tcgBlacklistWordRepository = tcgBlacklistWordRepository;
         _tcgChannelSettingsRepository = tcgChannelSettingsRepository;
+        _tcgMessageStateRepository = tcgMessageStateRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -84,6 +87,7 @@ public partial class BotService : BackgroundService
         _tcgHiddenItemRepository.EnsureTable();
         _tcgBlacklistWordRepository.EnsureTable();
         _tcgChannelSettingsRepository.EnsureTable();
+        _tcgMessageStateRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
 
@@ -168,6 +172,15 @@ public partial class BotService : BackgroundService
                 .OrderByDescending(m => m.Timestamp)
                 .FirstOrDefault();
             return lastBotMessage?.Id;
+        };
+
+        DiscordClient.GetTrackedTcgMessageIdsAsync = (channelId) =>
+            Task.FromResult(_tcgMessageStateRepository.GetMessageIds(channelId));
+
+        DiscordClient.SaveTrackedTcgMessageIdsAsync = (channelId, messageIds) =>
+        {
+            _tcgMessageStateRepository.SetMessageIds(channelId, messageIds);
+            return Task.CompletedTask;
         };
 
         DiscordClient.SendEmbedAsync = async (channelId, embed) =>
