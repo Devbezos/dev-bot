@@ -43,7 +43,7 @@ namespace dev_bot_tests.Tests
             ulong? receivedUserId = null;
             string? receivedMessage = null;
 
-            DiscordClient.SendDirectMessageAsync = (userId, message) =>
+            DiscordClient.SendMessageAsync = (userId, message) =>
             {
                 receivedUserId = userId;
                 receivedMessage = message;
