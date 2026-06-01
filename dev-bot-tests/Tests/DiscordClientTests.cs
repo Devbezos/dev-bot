@@ -38,15 +38,38 @@ namespace dev_bot_tests.Tests
         }
 
         [Fact]
-        public async Task PostWebHook_WhenDelegateIsSet_PostsGroupedByStore()
+        public async Task SendDirectMessage_WhenDelegateIsSet_InvokesDelegateWithCorrectArgs()
+        {
+            ulong? receivedUserId = null;
+            string? receivedMessage = null;
+
+            DiscordClient.SendDirectMessageAsync = (userId, message) =>
+            {
+                receivedUserId = userId;
+                receivedMessage = message;
+                return Task.CompletedTask;
+            };
+
+            var sut = new DiscordClient();
+            await sut.SendDirectMessage(178295063808311297ul, "New stock");
+
+            Assert.Equal(178295063808311297ul, receivedUserId);
+            Assert.Equal("New stock", receivedMessage);
+        }
+
+        [Fact]
+        public async Task PostWebHook_WhenDelegateIsSet_PostsEmbedGroupedByStore()
         {
             ulong? postedChannelId = null;
-            string? postedMessage = null;
+            string? postedDescription = null;
 
-            DiscordClient.SendMessageAsync = (channelId, message) =>
+            DiscordClient.SendEmbedWithIdAsync = null;
+            DiscordClient.EditEmbedMessageAsync = null;
+            DiscordClient.GetLatestBotMessageIdAsync = null;
+            DiscordClient.SendEmbedAsync = (channelId, embed) =>
             {
                 postedChannelId = channelId;
-                postedMessage = message;
+                postedDescription = embed.Description;
                 return Task.CompletedTask;
             };
 
@@ -65,8 +88,8 @@ namespace dev_bot_tests.Tests
             await sut.PostWebHook(777ul, searchResults);
 
             Assert.Equal(777ul, postedChannelId);
-            Assert.Contains("BestBuy", postedMessage);
-            Assert.Contains("PS5", postedMessage);
+            Assert.Contains("BestBuy", postedDescription);
+            Assert.Contains("https://example.com/ps5", postedDescription);
         }
 
         // ─── SendDroptimizerReminders ─────────────────────────────────────────

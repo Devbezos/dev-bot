@@ -2,44 +2,142 @@ using dev_library.Clients;
 using dev_library.Clients.Fitness;
 using dev_library.Data;
 using dev_library.Data.Fitness;
+using Discord;
 using System.Text.RegularExpressions;
 using TimeZoneConverter;
 
 public partial class BotService
 {
+    private const ulong PokemonTcgNotificationUserId = 178295063808311297;
     private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static string NormalizeStore(string store) => store.Replace(" 💸 Expensive", "", StringComparison.Ordinal).Trim();
 
-    private static bool IsMainResult(string game, Search search, Product product, IReadOnlyList<string> pokemonMainTerms)
+    private static string NormalizeProductName(string name)
+    {
+        return name.Trim().ToLowerInvariant();
+    }
+
+    private static string ExtractRawUrl(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+
+        var match = Regex.Match(value, @"\[.*?\]\((https?://[^)]+)\)", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value : value;
+    }
+
+    private static string NormalizeUrlForKey(string value)
+    {
+        var raw = ExtractRawUrl(value).Trim();
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+
+        if (!raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            raw = $"https://{raw}";
+        }
+
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+            return raw.ToLowerInvariant();
+
+        var left = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+        return left.ToLowerInvariant();
+    }
+
+    private static bool IsMainResult(Search search, Product product)
     {
         if (search.Store.Contains("💸", StringComparison.Ordinal)) return false;
         if (LanguageRegex.IsMatch(product.Name)) return false;
-        if (!game.Equals("pokemon", StringComparison.OrdinalIgnoreCase)) return true;
-
-        var lower = product.Name.ToLowerInvariant();
-        return pokemonMainTerms.Any(t => lower.Contains(t));
+        return true;
     }
 
     private List<Search> ApplyDiscordFilters(string game, List<Search> results)
     {
-        var pokemonMainTerms = _tcgFilterSettingsRepository.GetTerms("pokemon");
         var hidden = _tcgHiddenItemRepository.GetAll(game)
             .Select(h => $"{NormalizeStore(h.Store)}||{h.ProductName}")
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var blacklistWords = _tcgBlacklistWordRepository.GetAll(game)
+            .Select(x => x.Word)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim().ToLowerInvariant())
+            .ToArray();
 
         var output = new List<Search>();
         foreach (var s in results)
         {
             var store = NormalizeStore(s.Store);
             var products = s.Products
-                .Where(p => IsMainResult(game, s, p, pokemonMainTerms))
+                .Where(p => IsMainResult(s, p))
                 .Where(p => !hidden.Contains($"{store}||{p.Name}"))
+                .Where(p => !blacklistWords.Any(word => p.Name.Contains(word, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
             if (products.Count > 0)
                 output.Add(new Search(s.Keyword, store, products));
         }
         return output;
+    }
+
+    private static string ProductKey(string store, string productName, string url)
+    {
+        var normalizedStore = NormalizeStore(store).ToLowerInvariant();
+        var normalizedName = NormalizeProductName(productName);
+        var normalizedUrl = NormalizeUrlForKey(url);
+
+        // Prefer URL identity when available. Fall back to store + name when URL is unusable.
+        return string.IsNullOrWhiteSpace(normalizedUrl)
+            ? $"{normalizedStore}||{normalizedName}"
+            : $"{normalizedStore}||{normalizedUrl}||{normalizedName}";
+    }
+
+    private static List<(string Store, Product Product)> GetNewProducts(List<Search> latest, List<TcgResult> previous)
+    {
+        var previousKeys = previous
+            .Select(p => ProductKey(p.Store, p.ProductName, p.Url))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return latest
+            .SelectMany(s => s.Products.Select(p => (Store: NormalizeStore(s.Store), Product: p)))
+            .Where(x => !previousKeys.Contains(ProductKey(x.Store, x.Product.Name, x.Product.Url)))
+            .GroupBy(x => ProductKey(x.Store, x.Product.Name, x.Product.Url), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    private async Task NotifyNewPokemonProducts(List<(string Store, Product Product)> newProducts)
+    {
+        if (newProducts.Count == 0) return;
+
+        var lines = new List<string>();
+        foreach (var item in newProducts)
+        {
+            var line = $"- {item.Store}: {item.Product.Name} ({item.Product.Price})\n  {item.Product.Url.TrimEnd()}";
+            var candidate = $"New Pokemon TCG item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines.Append(line))}";
+            if (candidate.Length > 1800) break;
+            lines.Add(line);
+        }
+
+        if (newProducts.Count > lines.Count)
+            lines.Add($"...and {newProducts.Count - lines.Count} more.");
+
+        var message = $"New Pokemon TCG item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines)}";
+        try
+        {
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] DM to user {PokemonTcgNotificationUserId}: {message}");
+                return;
+            }
+
+            IUser? user = _discordBotClient.GetUser(PokemonTcgNotificationUserId);
+            user ??= await _discordBotClient.Rest.GetUserAsync(PokemonTcgNotificationUserId);
+            if (user != null)
+                await user.SendMessageAsync(message);
+        }
+        catch (Exception ex)
+        {
+            LogError($"Pokemon TCG new-item DM failed: {ex.Message}");
+        }
     }
 
     private async Task ScheduleCheck()
@@ -115,13 +213,15 @@ public partial class BotService
             if (pokemonJob != null && ShouldRunHourly(pokemonJob))
             {
                 var tcgResults = new List<Search>();
+                await using var browser = await PlaywrightBrowser.CreateAsync();
                 var scrapers = new (string Name, Func<Task<List<Search>>> Run)[]
                 {
-                    ("401Games", () => new _401GamesClient().GetPokemon()),
+                    ("401Games", () => new _401GamesClient(_tcgSourceUrlRepository).GetPokemon()),
                     ("Atlas", () => new AtlasClient(_tcgSourceUrlRepository).GetPokemon()),
                     ("Chimera", () => new ChimeraClient().GetPokemon()),
-                    ("EBGames", () => new EBGamesClient().GetPokemon()),
-                    ("JJ", () => new JJClient().GetProducts()),
+                    ("EBGames", () => new EBGamesClient(browser).GetPokemon()),
+                    ("JJ", () => new JJClient(browser).GetProducts()),
+                    ("Walmart", () => new WalmartClient(_tcgSourceUrlRepository, browser).GetPokemon()),
                     ("Dollys", () => new DollysClient(_tcgSourceUrlRepository).GetPokemon()),
                 };
 
@@ -142,7 +242,9 @@ public partial class BotService
                 }
 
                 var filtered = PokemonPriceFilter.Apply(tcgResults);
+                var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
                 var discordFiltered = ApplyDiscordFilters("pokemon", filtered);
+                var newPokemonProducts = GetNewProducts(discordFiltered, previousPokemonResults);
                 var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
                 try
                 {
@@ -156,7 +258,11 @@ public partial class BotService
                     LogError($"Pokemon TCG post failed for channel {pokemonChannelId}: {ex.Message}");
                 }
                 if (filtered.Any())
+                {
+                    if (newPokemonProducts.Any())
+                        await NotifyNewPokemonProducts(newPokemonProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, filtered, "pokemon");
+                }
                 _jobRepository.MarkRan(Constants.Jobs.PokemonTcg);
             }
 
