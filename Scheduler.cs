@@ -140,13 +140,24 @@ public partial class BotService
         }
     }
 
-    private async Task ScheduleCheck()
+    public async Task RunScheduledTick(CancellationToken cancellationToken)
     {
-        LogInfo("Scheduler started");
-        var eastern = TZConvert.GetTimeZoneInfo("Eastern Standard Time");
-
-        while (true)
+        if (!_discordReady)
         {
+            LogInfo("Scheduler tick skipped; bot is not ready yet");
+            return;
+        }
+
+        if (!await _schedulerTickLock.WaitAsync(0, cancellationToken))
+        {
+            LogWarn("Scheduler tick skipped; previous tick is still running");
+            return;
+        }
+
+        try
+        {
+            var eastern = TZConvert.GetTimeZoneInfo("Eastern Standard Time");
+
             // Reload guild config from DB each tick so UI changes take effect without a restart
             AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
             _guildsLastLoadedUtc = DateTime.UtcNow;
@@ -396,10 +407,10 @@ public partial class BotService
             {
                 LogError($"CheckNewApplications failed: {ex.Message}");
             }
-
-            var delayUntilNextMinute = TimeSpan.FromSeconds(60 - now.Second);
-            Console.Write($"\r[{DateTime.Now:HH:mm:ss}] Scheduler idle, next check at {DateTime.Now.Add(delayUntilNextMinute):HH:mm:ss}   ");
-            await Task.Delay(delayUntilNextMinute);
+        }
+        finally
+        {
+            _schedulerTickLock.Release();
         }
     }
 }

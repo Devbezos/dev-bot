@@ -58,7 +58,7 @@ namespace dev_bot_tests.Tests
         }
 
         [Fact]
-        public async Task PostWebHook_WhenDelegateIsSet_PostsEmbedGroupedByItem()
+        public async Task PostWebHook_WhenDelegateIsSet_PostsEmbedGroupedByFuzzyItemKey()
         {
             ulong? postedChannelId = null;
             string? postedDescription = null;
@@ -80,14 +80,14 @@ namespace dev_bot_tests.Tests
                     store: "BestBuy",
                     products: new List<Product>
                     {
-                        new Product("Pokemon Booster Box", "$149.99", "https://example.com/bestbuy/booster-box")
+                        new Product("Pokemon Mega Evolution Booster Box", "$149.99", "https://example.com/bestbuy/booster-box")
                     }),
                 new Search(
                     keyword: "Pokemon",
                     store: "GameStop",
                     products: new List<Product>
                     {
-                        new Product("Pokemon Booster Box", "$144.99", "https://example.com/gamestop/booster-box")
+                        new Product("Booster Boxes", "$144.99", "https://example.com/gamestop/booster-box")
                     })
             };
 
@@ -95,7 +95,8 @@ namespace dev_bot_tests.Tests
             await sut.PostWebHook(777ul, searchResults);
 
             Assert.Equal(777ul, postedChannelId);
-            Assert.Contains("- Pokemon Booster Box", postedDescription);
+            Assert.Contains("- Booster Boxes", postedDescription);
+            Assert.DoesNotContain("- Pokemon Mega Evolution Booster Box", postedDescription);
             Assert.Contains("BestBuy:", postedDescription);
             Assert.Contains("GameStop:", postedDescription);
             Assert.Contains("https://example.com/bestbuy/booster-box", postedDescription);
@@ -103,6 +104,45 @@ namespace dev_bot_tests.Tests
         }
 
         // ─── SendDroptimizerReminders ─────────────────────────────────────────
+
+        [Fact]
+        public async Task PostWebHook_WhenItemsHaveDifferentSetNames_DoesNotGroupThem()
+        {
+            string? postedDescription = null;
+
+            DiscordClient.SendEmbedWithIdAsync = null;
+            DiscordClient.EditEmbedMessageAsync = null;
+            DiscordClient.GetLatestBotMessageIdAsync = null;
+            DiscordClient.SendEmbedAsync = (_, embed) =>
+            {
+                postedDescription = embed.Description;
+                return Task.CompletedTask;
+            };
+
+            var searchResults = new List<Search>
+            {
+                new Search(
+                    keyword: "Gundam",
+                    store: "StoreA",
+                    products: new List<Product>
+                    {
+                        new Product("Mega Evolution Perfect Order Booster Box", "$149.99", "https://example.com/perfect-order")
+                    }),
+                new Search(
+                    keyword: "Gundam",
+                    store: "StoreB",
+                    products: new List<Product>
+                    {
+                        new Product("Mega Evolution Chaos Rising Booster Box", "$144.99", "https://example.com/chaos-rising")
+                    })
+            };
+
+            var sut = new DiscordClient();
+            await sut.PostWebHook(777ul, searchResults);
+
+            Assert.Contains("- Mega Evolution Chaos Rising Booster Box", postedDescription);
+            Assert.Contains("- Mega Evolution Perfect Order Booster Box", postedDescription);
+        }
 
         [Fact]
         public async Task SendDroptimizerReminders_GuildWithReminderEnabled_PostsToDroptimizerChannel()

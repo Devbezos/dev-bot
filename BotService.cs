@@ -31,7 +31,8 @@ public partial class BotService : BackgroundService
     private readonly ITcgChannelSettingsRepository _tcgChannelSettingsRepository;
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly DiscordSocketClient _discordBotClient;
-    private int _schedulerStarted = 0;
+    private volatile bool _discordReady;
+    private readonly SemaphoreSlim _schedulerTickLock = new(1, 1);
     private readonly ConcurrentDictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
 
     public BotService(
@@ -216,8 +217,8 @@ public partial class BotService : BackgroundService
         };
 
         await RestoreTrackedApplicationMessages();
-        if (Interlocked.Exchange(ref _schedulerStarted, 1) == 0)
-            await ScheduleCheck();
+        _discordReady = true;
+        LogInfo("Bot ready for scheduled jobs");
     }
 
     private Task Log(LogMessage msg)

@@ -44,7 +44,10 @@ var host = Host.CreateDefaultBuilder(args)
             AlwaysDownloadUsers = true
         }));
 
-        services.AddHostedService<BotService>();
+        services.AddSingleton<BotService>();
+        services.AddHostedService(sp => sp.GetRequiredService<BotService>());
+        services.AddSingleton<SchedulerTickJob>();
+        services.AddHostedService<QuartzSchedulerHostedService>();
     })
     .Build();
 
