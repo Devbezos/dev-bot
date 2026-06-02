@@ -199,6 +199,22 @@ public partial class BotService : BackgroundService
                 await channel.SendMessageAsync(embed: embed);
         };
 
+        DiscordClient.SendDirectMessageToUserAsync = async (userId, content) =>
+        {
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] DM to user {userId}: {content}");
+                return;
+            }
+
+            IUser? user = _discordBotClient.GetUser(userId);
+            user ??= await _discordBotClient.Rest.GetUserAsync(userId);
+            if (user != null)
+                await user.SendMessageAsync(content);
+            else
+                LogWarn($"SendDirectMessage: user {userId} not found");
+        };
+
         DiscordClient.CreateApplicationChannelAsync = async (categoryId, channelName) =>
         {
             var guild = _discordBotClient.Guilds.FirstOrDefault(g =>
