@@ -167,11 +167,13 @@ public partial class BotService
             var jobs = _jobRepository.GetAll();
             var globalEnabled = jobs.ToDictionary(j => j.Name, j => j.Enabled);
 
-            if (globalEnabled.GetValueOrDefault(Constants.Jobs.ServerAvailability, true))
+            var serverAvailabilityJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.ServerAvailability);
+            if (serverAvailabilityJob != null && _jobRepository.ShouldRun(serverAvailabilityJob, now))
             {
                 try
                 {
                     await _realmClient.PostServerAvailability();
+                    _jobRepository.MarkRan(serverAvailabilityJob.Name);
                 }
                 catch (Exception ex)
                 {
@@ -215,13 +217,8 @@ public partial class BotService
                     _jobRepository.MarkRan(fitnessWeekly.Name);
             }
 
-            var utcNow = DateTime.UtcNow;
-            bool ShouldRunHourly(ScheduledJob job) =>
-                job.Enabled &&
-                (job.LastRun == null || (utcNow - job.LastRun.Value).TotalMinutes >= 60);
-
             var tcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.Tcg);
-            if (tcgJob != null && ShouldRunHourly(tcgJob))
+            if (tcgJob != null && _jobRepository.ShouldRun(tcgJob, now))
             {
                 var tcgResults = new List<Search>();
                 await using var browser = await PlaywrightBrowser.CreateAsync();
@@ -380,6 +377,7 @@ public partial class BotService
             foreach (var job in jobs.Where(j =>
                 j.Name != Constants.Jobs.FitnessDaily &&
                 j.Name != Constants.Jobs.FitnessWeekly &&
+                j.Name != Constants.Jobs.ServerAvailability &&
                 j.Name != Constants.Jobs.Tcg &&
                 _jobRepository.ShouldRun(j, now)))
             {
