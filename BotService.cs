@@ -29,6 +29,7 @@ public partial class BotService : BackgroundService
     private readonly ITcgHiddenItemRepository _tcgHiddenItemRepository;
     private readonly ITcgBlacklistWordRepository _tcgBlacklistWordRepository;
     private readonly ITcgChannelSettingsRepository _tcgChannelSettingsRepository;
+    private readonly ITcgProductGroupRepository _tcgProductGroupRepository;
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _discordReady;
@@ -52,6 +53,7 @@ public partial class BotService : BackgroundService
         ITcgHiddenItemRepository tcgHiddenItemRepository,
         ITcgBlacklistWordRepository tcgBlacklistWordRepository,
         ITcgChannelSettingsRepository tcgChannelSettingsRepository,
+        ITcgProductGroupRepository tcgProductGroupRepository,
         ITcgMessageStateRepository tcgMessageStateRepository,
         DiscordSocketClient discordBotClient)
     {
@@ -71,6 +73,7 @@ public partial class BotService : BackgroundService
         _tcgHiddenItemRepository = tcgHiddenItemRepository;
         _tcgBlacklistWordRepository = tcgBlacklistWordRepository;
         _tcgChannelSettingsRepository = tcgChannelSettingsRepository;
+        _tcgProductGroupRepository = tcgProductGroupRepository;
         _tcgMessageStateRepository = tcgMessageStateRepository;
         _discordBotClient    = discordBotClient;
     }
@@ -88,6 +91,7 @@ public partial class BotService : BackgroundService
         _tcgHiddenItemRepository.EnsureTable();
         _tcgBlacklistWordRepository.EnsureTable();
         _tcgChannelSettingsRepository.EnsureTable();
+        _tcgProductGroupRepository.EnsureTable();
         _tcgMessageStateRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();

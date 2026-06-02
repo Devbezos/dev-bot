@@ -8,7 +8,6 @@ using TimeZoneConverter;
 
 public partial class BotService
 {
-    private const ulong PokemonTcgNotificationUserId = 178295063808311297;
     private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static string NormalizeStore(string store) => store.Replace(" 💸 Expensive", "", StringComparison.Ordinal).Trim();
@@ -104,15 +103,17 @@ public partial class BotService
             .ToList();
     }
 
-    private async Task NotifyNewPokemonProducts(List<(string Store, Product Product)> newProducts)
+    private async Task NotifyNewProducts(string label, string settingsKey, List<(string Store, Product Product)> newProducts)
     {
         if (newProducts.Count == 0) return;
+        var userIds = _tcgChannelSettingsRepository.GetNotificationUserIds(settingsKey);
+        if (userIds.Length == 0) return;
 
         var lines = new List<string>();
         foreach (var item in newProducts)
         {
             var line = $"- {item.Store}: {item.Product.Name} ({item.Product.Price})\n  {item.Product.Url.TrimEnd()}";
-            var candidate = $"New Pokemon TCG item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines.Append(line))}";
+            var candidate = $"New {label} item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines.Append(line))}";
             if (candidate.Length > 1800) break;
             lines.Add(line);
         }
@@ -120,23 +121,26 @@ public partial class BotService
         if (newProducts.Count > lines.Count)
             lines.Add($"...and {newProducts.Count - lines.Count} more.");
 
-        var message = $"New Pokemon TCG item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines)}";
-        try
+        var message = $"New {label} item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines)}";
+        foreach (var userId in userIds)
         {
-            if (AppSettings.DryRun)
+            try
             {
-                LogInfo($"[DRY RUN] DM to user {PokemonTcgNotificationUserId}: {message}");
-                return;
-            }
+                if (AppSettings.DryRun)
+                {
+                    LogInfo($"[DRY RUN] DM to user {userId}: {message}");
+                    continue;
+                }
 
-            IUser? user = _discordBotClient.GetUser(PokemonTcgNotificationUserId);
-            user ??= await _discordBotClient.Rest.GetUserAsync(PokemonTcgNotificationUserId);
-            if (user != null)
-                await user.SendMessageAsync(message);
-        }
-        catch (Exception ex)
-        {
-            LogError($"Pokemon TCG new-item DM failed: {ex.Message}");
+                IUser? user = _discordBotClient.GetUser(userId);
+                user ??= await _discordBotClient.Rest.GetUserAsync(userId);
+                if (user != null)
+                    await user.SendMessageAsync(message);
+            }
+            catch (Exception ex)
+            {
+                LogError($"{label} new-item DM failed for user {userId}: {ex.Message}");
+            }
         }
     }
 
@@ -217,8 +221,8 @@ public partial class BotService
                     _jobRepository.MarkRan(fitnessWeekly.Name);
             }
 
-            var tcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.Tcg);
-            if (tcgJob != null && _jobRepository.ShouldRun(tcgJob, now))
+            var pokemonTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonTcg);
+            if (pokemonTcgJob != null && _jobRepository.ShouldRun(pokemonTcgJob, now))
             {
                 var tcgResults = new List<Search>();
                 await using var browser = await PlaywrightBrowser.CreateAsync();
@@ -230,6 +234,10 @@ public partial class BotService
                     ("EBGames", () => new EBGamesClient(browser).GetPokemon()),
                     ("HouseOfCards", () => new HouseOfCardsClient(_tcgSourceUrlRepository).GetPokemon()),
                     ("JJ", () => new JJClient(browser).GetProducts()),
+                    ("Shopify Pokemon", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetPokemon(
+                        "DarkFoxTCG",
+                        "EnterTheBattlefield",
+                        "TopShelfCo")),
                     ("Walmart", () => new WalmartClient(_tcgSourceUrlRepository, browser).GetPokemon()),
                     ("Dollys", () => new DollysClient(_tcgSourceUrlRepository).GetPokemon()),
                 };
@@ -250,7 +258,9 @@ public partial class BotService
                     }
                 }
 
-                var filtered = PokemonPriceFilter.Apply(tcgResults);
+                var filtered = TcgMsrpPriceFilter.HideOverDoubleMsrp(
+                    PokemonPriceFilter.Apply(tcgResults),
+                    _tcgProductGroupRepository.GetAll("pokemon"));
                 var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
                 var discordFiltered = ApplyDiscordFilters("pokemon", filtered);
                 var newPokemonProducts = GetNewProducts(discordFiltered, previousPokemonResults);
@@ -269,15 +279,24 @@ public partial class BotService
                 if (filtered.Any())
                 {
                     if (newPokemonProducts.Any())
-                        await NotifyNewPokemonProducts(newPokemonProducts);
+                        await NotifyNewProducts("Pokemon TCG", "pokemon", newPokemonProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, filtered, "pokemon");
                 }
 
+                _jobRepository.MarkRan(Constants.Jobs.PokemonTcg);
+            }
+
+            var gundamTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.GundamTcg);
+            if (gundamTcgJob != null && _jobRepository.ShouldRun(gundamTcgJob, now))
+            {
                 var gundamResults = new List<Search>();
                 var gundamScrapers = new (string Name, Func<Task<List<Search>>> Run)[]
                 {
                     ("Atlas Gundam", () => new AtlasClient(_tcgSourceUrlRepository).GetGundam()),
                     ("Dollys Gundam", () => new DollysClient(_tcgSourceUrlRepository).GetGundam()),
+                    ("Shopify Gundam", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetGundam(
+                        "TopShelfCo",
+                        "Untouchables")),
                 };
 
                 foreach (var scraper in gundamScrapers)
@@ -296,7 +315,12 @@ public partial class BotService
                     }
                 }
 
-                var gundamDiscordFiltered = ApplyDiscordFilters("gundam", gundamResults);
+                var filteredGundamResults = TcgMsrpPriceFilter.HideOverDoubleMsrp(
+                    gundamResults,
+                    _tcgProductGroupRepository.GetAll("gundam"));
+                var previousGundamResults = _tcgRepository.GetLatestRun("gundam");
+                var gundamDiscordFiltered = ApplyDiscordFilters("gundam", filteredGundamResults);
+                var newGundamProducts = GetNewProducts(gundamDiscordFiltered, previousGundamResults);
                 var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
                 try
                 {
@@ -309,9 +333,19 @@ public partial class BotService
                 {
                     LogError($"Gundam TCG post failed for channel {gundamChannelId}: {ex.Message}");
                 }
-                if (gundamResults.Any())
-                    _tcgRepository.SaveResults(DateTime.UtcNow, gundamResults, "gundam");
+                if (filteredGundamResults.Any())
+                {
+                    if (newGundamProducts.Any())
+                        await NotifyNewProducts("Gundam TCG", "gundam", newGundamProducts);
+                    _tcgRepository.SaveResults(DateTime.UtcNow, filteredGundamResults, "gundam");
+                }
 
+                _jobRepository.MarkRan(Constants.Jobs.GundamTcg);
+            }
+
+            var preorderTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PreorderTcg);
+            if (preorderTcgJob != null && _jobRepository.ShouldRun(preorderTcgJob, now))
+            {
                 var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
                 var preorderResults = new List<Search>();
 
@@ -355,7 +389,12 @@ public partial class BotService
                     LogError($"Pre-order scrape failed: Gundam 401Games: {ex.Message}");
                 }
 
-                var preorderDiscordFiltered = ApplyDiscordFilters("preorder", preorderResults);
+                var previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
+                var preorderDiscordFiltered = ApplyDiscordFilters("preorder", TcgMsrpPriceFilter.HideOverDoubleMsrp(
+                    preorderResults,
+                    _tcgProductGroupRepository.GetAll("pokemon")
+                        .Concat(_tcgProductGroupRepository.GetAll("gundam"))));
+                var newPreorderProducts = GetNewProducts(preorderDiscordFiltered, previousPreorderResults);
                 var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
                 try
                 {
@@ -368,10 +407,14 @@ public partial class BotService
                 {
                     LogError($"Pre-order TCG post failed for channel {preorderChannelId}: {ex.Message}");
                 }
-                if (preorderResults.Any())
-                    _tcgRepository.SaveResults(DateTime.UtcNow, preorderResults, "preorder");
+                if (preorderDiscordFiltered.Any())
+                {
+                    if (newPreorderProducts.Any())
+                        await NotifyNewProducts("Pre-Order TCG", "preorder", newPreorderProducts);
+                    _tcgRepository.SaveResults(DateTime.UtcNow, preorderDiscordFiltered, "preorder");
+                }
 
-                _jobRepository.MarkRan(Constants.Jobs.Tcg);
+                _jobRepository.MarkRan(Constants.Jobs.PreorderTcg);
             }
 
             foreach (var job in jobs.Where(j =>
@@ -379,6 +422,9 @@ public partial class BotService
                 j.Name != Constants.Jobs.FitnessWeekly &&
                 j.Name != Constants.Jobs.ServerAvailability &&
                 j.Name != Constants.Jobs.Tcg &&
+                j.Name != Constants.Jobs.PokemonTcg &&
+                j.Name != Constants.Jobs.GundamTcg &&
+                j.Name != Constants.Jobs.PreorderTcg &&
                 _jobRepository.ShouldRun(j, now)))
             {
                 switch (job.Name)
