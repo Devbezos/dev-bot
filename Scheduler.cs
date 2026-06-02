@@ -144,6 +144,103 @@ public partial class BotService
         }
     }
 
+    private async Task RunPokemonPreorderJob()
+    {
+        var preorderResults = new List<Search>();
+        var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
+
+        try
+        {
+            LogInfo("Pokemon pre-order scrape starting: 401Games");
+            var results = await preorderClient.GetPokemonPreOrders();
+            var nonEmpty = results.Where(r => r.Products.Any()).ToList();
+            preorderResults.AddRange(nonEmpty);
+            LogInfo($"Pokemon pre-order scrape finished: 401Games - {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+        }
+        catch (Exception ex)
+        {
+            LogError($"Pokemon pre-order scrape failed: 401Games: {ex.Message}");
+        }
+
+        try
+        {
+            var hobbiesvilleClient = new HobbiesvilleClient(_tcgSourceUrlRepository);
+            LogInfo("Pokemon pre-order scrape starting: Hobbiesville");
+            var results = await hobbiesvilleClient.GetPokemonPreOrders();
+            var nonEmpty = results.Where(r => r.Products.Any()).ToList();
+            preorderResults.AddRange(nonEmpty);
+            LogInfo($"Pokemon pre-order scrape finished: Hobbiesville - {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+        }
+        catch (Exception ex)
+        {
+            LogError($"Pokemon pre-order scrape failed: Hobbiesville: {ex.Message}");
+        }
+
+        await PostPreorderResults(
+            label: "Pokemon Pre-Order TCG",
+            resultsKey: "pokemon_preorder",
+            settingsKey: "pokemon_preorder",
+            filterGame: "pokemon",
+            preorderResults);
+    }
+
+    private async Task RunGundamPreorderJob()
+    {
+        var preorderResults = new List<Search>();
+        var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
+
+        try
+        {
+            LogInfo("Gundam pre-order scrape starting: 401Games");
+            var results = await preorderClient.GetGundamPreOrders();
+            var nonEmpty = results.Where(r => r.Products.Any()).ToList();
+            preorderResults.AddRange(nonEmpty);
+            LogInfo($"Gundam pre-order scrape finished: 401Games - {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+        }
+        catch (Exception ex)
+        {
+            LogError($"Gundam pre-order scrape failed: 401Games: {ex.Message}");
+        }
+
+        await PostPreorderResults(
+            label: "Gundam Pre-Order TCG",
+            resultsKey: "gundam_preorder",
+            settingsKey: "gundam_preorder",
+            filterGame: "gundam",
+            preorderResults);
+    }
+
+    private async Task PostPreorderResults(string label, string resultsKey, string settingsKey, string filterGame, List<Search> preorderResults)
+    {
+        var previousPreorderResults = _tcgRepository.GetLatestRun(resultsKey);
+        if (previousPreorderResults.Count == 0)
+            previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
+        var preorderDiscordFiltered = ApplyDiscordFilters("preorder", TcgMsrpPriceFilter.HideOverDoubleMsrp(
+            preorderResults,
+            _tcgProductGroupRepository.GetAll(filterGame)));
+        var newPreorderProducts = GetNewProducts(preorderDiscordFiltered, previousPreorderResults);
+        var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
+
+        try
+        {
+            if (preorderChannelId != 0)
+                await _discordClient.PostWebHook(preorderChannelId, preorderDiscordFiltered);
+            else
+                LogWarn("Pre-order TCG channel is not configured; skipping Discord post");
+        }
+        catch (Exception ex)
+        {
+            LogError($"{label} post failed for channel {preorderChannelId}: {ex.Message}");
+        }
+
+        if (preorderDiscordFiltered.Any())
+        {
+            if (newPreorderProducts.Any())
+                await NotifyNewProducts(label, settingsKey, newPreorderProducts);
+            _tcgRepository.SaveResults(DateTime.UtcNow, preorderDiscordFiltered, resultsKey);
+        }
+    }
+
     public async Task RunScheduledTick(CancellationToken cancellationToken)
     {
         if (!_discordReady)
@@ -343,78 +440,18 @@ public partial class BotService
                 _jobRepository.MarkRan(Constants.Jobs.GundamTcg);
             }
 
-            var preorderTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PreorderTcg);
-            if (preorderTcgJob != null && _jobRepository.ShouldRun(preorderTcgJob, now))
+            var pokemonPreorderTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonPreorderTcg);
+            if (pokemonPreorderTcgJob != null && _jobRepository.ShouldRun(pokemonPreorderTcgJob, now))
             {
-                var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
-                var preorderResults = new List<Search>();
+                await RunPokemonPreorderJob();
+                _jobRepository.MarkRan(Constants.Jobs.PokemonPreorderTcg);
+            }
 
-                try
-                {
-                    LogInfo("Pre-order scrape starting: Pokemon 401Games");
-                    var results = await preorderClient.GetPokemonPreOrders();
-                    var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-                    preorderResults.AddRange(nonEmpty);
-                    LogInfo($"Pre-order scrape finished: Pokemon 401Games — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-                }
-                catch (Exception ex)
-                {
-                    LogError($"Pre-order scrape failed: Pokemon 401Games: {ex.Message}");
-                }
-
-                try
-                {
-                    var hobbiesvilleClient = new HobbiesvilleClient(_tcgSourceUrlRepository);
-                    LogInfo("Pre-order scrape starting: Pokemon Hobbiesville");
-                    var results = await hobbiesvilleClient.GetPokemonPreOrders();
-                    var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-                    preorderResults.AddRange(nonEmpty);
-                    LogInfo($"Pre-order scrape finished: Pokemon Hobbiesville — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-                }
-                catch (Exception ex)
-                {
-                    LogError($"Pre-order scrape failed: Pokemon Hobbiesville: {ex.Message}");
-                }
-
-                try
-                {
-                    LogInfo("Pre-order scrape starting: Gundam 401Games");
-                    var results = await preorderClient.GetGundamPreOrders();
-                    var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-                    preorderResults.AddRange(nonEmpty);
-                    LogInfo($"Pre-order scrape finished: Gundam 401Games — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-                }
-                catch (Exception ex)
-                {
-                    LogError($"Pre-order scrape failed: Gundam 401Games: {ex.Message}");
-                }
-
-                var previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
-                var preorderDiscordFiltered = ApplyDiscordFilters("preorder", TcgMsrpPriceFilter.HideOverDoubleMsrp(
-                    preorderResults,
-                    _tcgProductGroupRepository.GetAll("pokemon")
-                        .Concat(_tcgProductGroupRepository.GetAll("gundam"))));
-                var newPreorderProducts = GetNewProducts(preorderDiscordFiltered, previousPreorderResults);
-                var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
-                try
-                {
-                    if (preorderChannelId != 0)
-                        await _discordClient.PostWebHook(preorderChannelId, preorderDiscordFiltered);
-                    else
-                        LogWarn("Pre-order TCG channel is not configured; skipping Discord post");
-                }
-                catch (Exception ex)
-                {
-                    LogError($"Pre-order TCG post failed for channel {preorderChannelId}: {ex.Message}");
-                }
-                if (preorderDiscordFiltered.Any())
-                {
-                    if (newPreorderProducts.Any())
-                        await NotifyNewProducts("Pre-Order TCG", "preorder", newPreorderProducts);
-                    _tcgRepository.SaveResults(DateTime.UtcNow, preorderDiscordFiltered, "preorder");
-                }
-
-                _jobRepository.MarkRan(Constants.Jobs.PreorderTcg);
+            var gundamPreorderTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.GundamPreorderTcg);
+            if (gundamPreorderTcgJob != null && _jobRepository.ShouldRun(gundamPreorderTcgJob, now))
+            {
+                await RunGundamPreorderJob();
+                _jobRepository.MarkRan(Constants.Jobs.GundamPreorderTcg);
             }
 
             foreach (var job in jobs.Where(j =>
@@ -425,6 +462,8 @@ public partial class BotService
                 j.Name != Constants.Jobs.PokemonTcg &&
                 j.Name != Constants.Jobs.GundamTcg &&
                 j.Name != Constants.Jobs.PreorderTcg &&
+                j.Name != Constants.Jobs.PokemonPreorderTcg &&
+                j.Name != Constants.Jobs.GundamPreorderTcg &&
                 _jobRepository.ShouldRun(j, now)))
             {
                 switch (job.Name)
