@@ -220,6 +220,7 @@ public partial class BotService
                     ("Atlas", () => new AtlasClient(_tcgSourceUrlRepository).GetPokemon()),
                     ("Chimera", () => new ChimeraClient().GetPokemon()),
                     ("EBGames", () => new EBGamesClient(browser).GetPokemon()),
+                    ("HouseOfCards", () => new HouseOfCardsClient(_tcgSourceUrlRepository).GetPokemon()),
                     ("JJ", () => new JJClient(browser).GetProducts()),
                     ("Walmart", () => new WalmartClient(_tcgSourceUrlRepository, browser).GetPokemon()),
                     ("Dollys", () => new DollysClient(_tcgSourceUrlRepository).GetPokemon()),
@@ -317,6 +318,20 @@ public partial class BotService
                 catch (Exception ex)
                 {
                     LogError($"Pre-order scrape failed: Pokemon 401Games: {ex.Message}");
+                }
+
+                try
+                {
+                    var hobbiesvilleClient = new HobbiesvilleClient(_tcgSourceUrlRepository);
+                    LogInfo("Pre-order scrape starting: Pokemon Hobbiesville");
+                    var results = await hobbiesvilleClient.GetPokemonPreOrders();
+                    var nonEmpty = results.Where(r => r.Products.Any()).ToList();
+                    preorderResults.AddRange(nonEmpty);
+                    LogInfo($"Pre-order scrape finished: Pokemon Hobbiesville — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Pre-order scrape failed: Pokemon Hobbiesville: {ex.Message}");
                 }
 
                 try
