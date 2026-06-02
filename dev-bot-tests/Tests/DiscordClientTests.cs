@@ -58,7 +58,7 @@ namespace dev_bot_tests.Tests
         }
 
         [Fact]
-        public async Task PostWebHook_WhenDelegateIsSet_PostsEmbedGroupedByStore()
+        public async Task PostWebHook_WhenDelegateIsSet_PostsEmbedGroupedByItem()
         {
             ulong? postedChannelId = null;
             string? postedDescription = null;
@@ -76,11 +76,18 @@ namespace dev_bot_tests.Tests
             var searchResults = new List<Search>
             {
                 new Search(
-                    keyword: "PS5",
+                    keyword: "Pokemon",
                     store: "BestBuy",
                     products: new List<Product>
                     {
-                        new Product("PlayStation 5", "699", "https://example.com/ps5")
+                        new Product("Pokemon Booster Box", "$149.99", "https://example.com/bestbuy/booster-box")
+                    }),
+                new Search(
+                    keyword: "Pokemon",
+                    store: "GameStop",
+                    products: new List<Product>
+                    {
+                        new Product("Pokemon Booster Box", "$144.99", "https://example.com/gamestop/booster-box")
                     })
             };
 
@@ -88,8 +95,11 @@ namespace dev_bot_tests.Tests
             await sut.PostWebHook(777ul, searchResults);
 
             Assert.Equal(777ul, postedChannelId);
-            Assert.Contains("BestBuy", postedDescription);
-            Assert.Contains("https://example.com/ps5", postedDescription);
+            Assert.Contains("- Pokemon Booster Box", postedDescription);
+            Assert.Contains("BestBuy:", postedDescription);
+            Assert.Contains("GameStop:", postedDescription);
+            Assert.Contains("https://example.com/bestbuy/booster-box", postedDescription);
+            Assert.Contains("https://example.com/gamestop/booster-box", postedDescription);
         }
 
         // ─── SendDroptimizerReminders ─────────────────────────────────────────
