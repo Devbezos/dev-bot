@@ -241,6 +241,101 @@ public partial class BotService
         }
     }
 
+    private async Task RunPokemonCenterSecurityCheck(CancellationToken cancellationToken)
+    {
+        const string stateKey = "pokemon_center_ca";
+        const string settingsKey = "pokemon_center_security";
+
+        PokemonCenterSecuritySnapshot snapshot;
+        try
+        {
+            snapshot = await new PokemonCenterSecurityClient().GetSnapshot(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            LogError($"Pokemon Center security check failed: {ex.Message}");
+            return;
+        }
+
+        var previous = _pokemonCenterSecurityStateRepository.Get(stateKey);
+        _pokemonCenterSecurityStateRepository.Set(new PokemonCenterSecurityState(
+            stateKey,
+            snapshot.Fingerprint,
+            snapshot.Summary,
+            DateTime.UtcNow));
+
+        if (previous == null)
+        {
+            LogInfo($"Pokemon Center security baseline saved: {snapshot.Summary.Replace("\n", " | ")}");
+            return;
+        }
+
+        if (string.Equals(previous.Fingerprint, snapshot.Fingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            LogInfo("Pokemon Center security check unchanged");
+            return;
+        }
+
+        var message = BuildPokemonCenterSecurityMessage(previous, snapshot);
+        var channelId = _tcgChannelSettingsRepository.GetChannelId(settingsKey);
+        if (channelId != 0)
+        {
+            try
+            {
+                await _discordClient.PostToChannel(channelId, message);
+            }
+            catch (Exception ex)
+            {
+                LogError($"Pokemon Center security notification failed for channel {channelId}: {ex.Message}");
+            }
+        }
+        else
+        {
+            LogWarn("Pokemon Center security channel is not configured; skipping Discord post");
+        }
+
+        foreach (var userId in _tcgChannelSettingsRepository.GetNotificationUserIds(settingsKey))
+        {
+            try
+            {
+                await _discordClient.SendDirectMessage(userId, message);
+            }
+            catch (Exception ex)
+            {
+                LogError($"Pokemon Center security DM failed for user {userId}: {ex.Message}");
+            }
+        }
+    }
+
+    private static string BuildPokemonCenterSecurityMessage(PokemonCenterSecurityState previous, PokemonCenterSecuritySnapshot current)
+    {
+        var previousSummary = LimitBlock(previous.Summary, 700);
+        var currentSummary = LimitBlock(current.Summary, 700);
+        var headline = current.QueueDetected
+            ? "Pokemon Center security difference found - queue/security layer may be active."
+            : "Pokemon Center security difference found.";
+
+        return $"""
+            {headline}
+
+            Previous:
+            ```text
+            {previousSummary}
+            ```
+
+            Current:
+            ```text
+            {currentSummary}
+            ```
+            """;
+    }
+
+    private static string LimitBlock(string value, int maxLength)
+    {
+        if (value.Length <= maxLength) return value;
+        return value[..Math.Max(0, maxLength - 20)] + "\n...truncated";
+    }
+ 
     public async Task RunScheduledTick(CancellationToken cancellationToken)
     {
         if (!_discordReady)
@@ -280,6 +375,13 @@ public partial class BotService
                 {
                     LogError($"PostServerAvailability failed: {ex.Message}");
                 }
+            }
+
+            var pokemonCenterSecurityJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonCenterSecurity);
+            if (pokemonCenterSecurityJob != null && _jobRepository.ShouldRun(pokemonCenterSecurityJob, now))
+            {
+                await RunPokemonCenterSecurityCheck(cancellationToken);
+                _jobRepository.MarkRan(Constants.Jobs.PokemonCenterSecurity);
             }
 
             var fitnessUsers = _fitnessRepository.GetUsers();
@@ -458,6 +560,7 @@ public partial class BotService
                 j.Name != Constants.Jobs.FitnessDaily &&
                 j.Name != Constants.Jobs.FitnessWeekly &&
                 j.Name != Constants.Jobs.ServerAvailability &&
+                j.Name != Constants.Jobs.PokemonCenterSecurity &&
                 j.Name != Constants.Jobs.Tcg &&
                 j.Name != Constants.Jobs.PokemonTcg &&
                 j.Name != Constants.Jobs.GundamTcg &&

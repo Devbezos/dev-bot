@@ -31,6 +31,7 @@ public partial class BotService : BackgroundService
     private readonly ITcgChannelSettingsRepository _tcgChannelSettingsRepository;
     private readonly ITcgProductGroupRepository _tcgProductGroupRepository;
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
+    private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _discordReady;
     private readonly SemaphoreSlim _schedulerTickLock = new(1, 1);
@@ -55,6 +56,7 @@ public partial class BotService : BackgroundService
         ITcgChannelSettingsRepository tcgChannelSettingsRepository,
         ITcgProductGroupRepository tcgProductGroupRepository,
         ITcgMessageStateRepository tcgMessageStateRepository,
+        IPokemonCenterSecurityStateRepository pokemonCenterSecurityStateRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -75,6 +77,7 @@ public partial class BotService : BackgroundService
         _tcgChannelSettingsRepository = tcgChannelSettingsRepository;
         _tcgProductGroupRepository = tcgProductGroupRepository;
         _tcgMessageStateRepository = tcgMessageStateRepository;
+        _pokemonCenterSecurityStateRepository = pokemonCenterSecurityStateRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -93,6 +96,7 @@ public partial class BotService : BackgroundService
         _tcgChannelSettingsRepository.EnsureTable();
         _tcgProductGroupRepository.EnsureTable();
         _tcgMessageStateRepository.EnsureTable();
+        _pokemonCenterSecurityStateRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
 
