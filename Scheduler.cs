@@ -241,6 +241,23 @@ public partial class BotService
         }
     }
 
+    private async Task SaveDivertedPreorderResults(string label, string resultsKey, string settingsKey, List<Search> preorderResults)
+    {
+        if (!preorderResults.Any()) return;
+
+        var previousPreorderResults = _tcgRepository.GetLatestRun(resultsKey);
+        var newPreorderProducts = GetNewProducts(preorderResults, previousPreorderResults);
+        var mergedPreorders = TcgPreorderClassifier.Merge(
+            TcgPreorderClassifier.FromTcgResults(previousPreorderResults)
+                .Concat(preorderResults));
+
+        if (newPreorderProducts.Any())
+            await NotifyNewProducts(label, settingsKey, newPreorderProducts);
+
+        _tcgRepository.SaveResults(DateTime.UtcNow, mergedPreorders, resultsKey);
+        LogInfo($"{label}: diverted {preorderResults.Sum(r => r.Products.Count)} pre-order-like product(s) from normal TCG results");
+    }
+
     private async Task RunPokemonCenterSecurityCheck(CancellationToken cancellationToken)
     {
         const string stateKey = "pokemon_center_ca";
@@ -261,41 +278,47 @@ public partial class BotService
         var nextState = new PokemonCenterSecurityState(
             stateKey,
             snapshot.Fingerprint,
+            snapshot.QueueDetected || snapshot.CaptchaDetected,
             snapshot.Summary,
             DateTime.UtcNow);
 
         if (previous == null)
         {
-            if (snapshot.QueueDetected || snapshot.CaptchaDetected)
-            {
-                var activeBaselineMessage = BuildPokemonCenterSecurityMessage(previous, snapshot);
-                if (!await NotifyPokemonCenterSecurity(settingsKey, activeBaselineMessage))
-                {
-                    LogWarn("Pokemon Center security baseline is active, but no notification was sent; leaving previous state unset");
-                    return;
-                }
-            }
-
             _pokemonCenterSecurityStateRepository.Set(nextState);
             LogInfo($"Pokemon Center security baseline saved: {snapshot.Summary.Replace("\n", " | ")}");
             return;
         }
 
-        if (string.Equals(previous.Fingerprint, snapshot.Fingerprint, StringComparison.OrdinalIgnoreCase))
+        var currentSecurityDetected = snapshot.QueueDetected || snapshot.CaptchaDetected;
+        if (previous.QueueDetected == currentSecurityDetected)
         {
             _pokemonCenterSecurityStateRepository.Set(nextState);
-            LogInfo("Pokemon Center security check unchanged");
+            LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")}");
             return;
         }
 
-        var message = BuildPokemonCenterSecurityMessage(previous, snapshot);
-        if (!await NotifyPokemonCenterSecurity(settingsKey, message))
-        {
-            LogWarn("Pokemon Center security changed, but no notification was sent; leaving previous state unchanged");
-            return;
-        }
+        _pokemonCenterSecurityStateRepository.AddTransition(new PokemonCenterSecurityTransition(
+            stateKey,
+            previous.QueueDetected,
+            currentSecurityDetected,
+            previous.Fingerprint,
+            snapshot.Fingerprint,
+            previous.Summary,
+            snapshot.Summary,
+            DateTime.UtcNow));
 
         _pokemonCenterSecurityStateRepository.Set(nextState);
+
+        if (!previous.QueueDetected && currentSecurityDetected)
+        {
+            var message = BuildPokemonCenterSecurityActivatedMessage(previous, snapshot);
+            if (!await NotifyPokemonCenterSecurity(settingsKey, message))
+                LogWarn("Pokemon Center queue/security turned on, but no notification was sent");
+        }
+        else
+        {
+            LogInfo("Pokemon Center queue/security turned off; transition stored without notification");
+        }
     }
 
     private async Task<bool> NotifyPokemonCenterSecurity(string settingsKey, string message)
@@ -335,18 +358,13 @@ public partial class BotService
         return sent;
     }
 
-    private static string BuildPokemonCenterSecurityMessage(PokemonCenterSecurityState? previous, PokemonCenterSecuritySnapshot current)
+    private static string BuildPokemonCenterSecurityActivatedMessage(PokemonCenterSecurityState previous, PokemonCenterSecuritySnapshot current)
     {
-        var previousSummary = previous == null
-            ? "No previous baseline existed. This active security/queue state was found on the first check."
-            : LimitBlock(previous.Summary, 700);
+        var previousSummary = LimitBlock(previous.Summary, 700);
         var currentSummary = LimitBlock(current.Summary, 700);
-        var headline = current.QueueDetected || current.CaptchaDetected
-            ? "Pokemon Center security difference found - queue/security layer may be active."
-            : "Pokemon Center security difference found.";
 
         return $"""
-            {headline}
+            Pokemon Center queue/security is now active.
 
             Previous:
             ```text
@@ -490,14 +508,18 @@ public partial class BotService
                 var filtered = TcgMsrpPriceFilter.HideOverDoubleMsrp(
                     PokemonPriceFilter.Apply(tcgResults),
                     _tcgProductGroupRepository.GetAll("pokemon"));
+                var splitPokemonResults = TcgPreorderClassifier.Split(filtered);
                 var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
-                var discordFiltered = ApplyDiscordFilters("pokemon", filtered);
+                var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
+                var divertedPreorders = ApplyDiscordFilters("preorder", splitPokemonResults.Preorders);
                 var newPokemonProducts = GetNewProducts(discordFiltered, previousPokemonResults);
                 var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
                 try
                 {
-                    if (pokemonChannelId != 0)
+                    if (pokemonChannelId != 0 && discordFiltered.Any())
                         await _discordClient.PostWebHook(pokemonChannelId, discordFiltered);
+                    else if (pokemonChannelId != 0)
+                        LogInfo("Pokemon TCG post skipped; all products were filtered or diverted");
                     else
                         LogWarn("Pokemon TCG channel is not configured; skipping Discord post");
                 }
@@ -509,7 +531,8 @@ public partial class BotService
                 {
                     if (newPokemonProducts.Any())
                         await NotifyNewProducts("Pokemon TCG", "pokemon", newPokemonProducts);
-                    _tcgRepository.SaveResults(DateTime.UtcNow, filtered, "pokemon");
+                    _tcgRepository.SaveResults(DateTime.UtcNow, splitPokemonResults.Regular, "pokemon");
+                    await SaveDivertedPreorderResults("Pokemon Pre-Order TCG", "pokemon_preorder", "pokemon_preorder", divertedPreorders);
                 }
 
                 _jobRepository.MarkRan(Constants.Jobs.PokemonTcg);
@@ -547,14 +570,18 @@ public partial class BotService
                 var filteredGundamResults = TcgMsrpPriceFilter.HideOverDoubleMsrp(
                     gundamResults,
                     _tcgProductGroupRepository.GetAll("gundam"));
+                var splitGundamResults = TcgPreorderClassifier.Split(filteredGundamResults);
                 var previousGundamResults = _tcgRepository.GetLatestRun("gundam");
-                var gundamDiscordFiltered = ApplyDiscordFilters("gundam", filteredGundamResults);
+                var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
+                var divertedGundamPreorders = ApplyDiscordFilters("preorder", splitGundamResults.Preorders);
                 var newGundamProducts = GetNewProducts(gundamDiscordFiltered, previousGundamResults);
                 var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
                 try
                 {
-                    if (gundamChannelId != 0)
+                    if (gundamChannelId != 0 && gundamDiscordFiltered.Any())
                         await _discordClient.PostWebHook(gundamChannelId, gundamDiscordFiltered);
+                    else if (gundamChannelId != 0)
+                        LogInfo("Gundam TCG post skipped; all products were filtered or diverted");
                     else
                         LogWarn("Gundam TCG channel is not configured; skipping Discord post");
                 }
@@ -566,7 +593,8 @@ public partial class BotService
                 {
                     if (newGundamProducts.Any())
                         await NotifyNewProducts("Gundam TCG", "gundam", newGundamProducts);
-                    _tcgRepository.SaveResults(DateTime.UtcNow, filteredGundamResults, "gundam");
+                    _tcgRepository.SaveResults(DateTime.UtcNow, splitGundamResults.Regular, "gundam");
+                    await SaveDivertedPreorderResults("Gundam Pre-Order TCG", "gundam_preorder", "gundam_preorder", divertedGundamPreorders);
                 }
 
                 _jobRepository.MarkRan(Constants.Jobs.GundamTcg);
