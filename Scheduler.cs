@@ -258,31 +258,56 @@ public partial class BotService
         }
 
         var previous = _pokemonCenterSecurityStateRepository.Get(stateKey);
-        _pokemonCenterSecurityStateRepository.Set(new PokemonCenterSecurityState(
+        var nextState = new PokemonCenterSecurityState(
             stateKey,
             snapshot.Fingerprint,
             snapshot.Summary,
-            DateTime.UtcNow));
+            DateTime.UtcNow);
 
         if (previous == null)
         {
+            if (snapshot.QueueDetected || snapshot.CaptchaDetected)
+            {
+                var activeBaselineMessage = BuildPokemonCenterSecurityMessage(previous, snapshot);
+                if (!await NotifyPokemonCenterSecurity(settingsKey, activeBaselineMessage))
+                {
+                    LogWarn("Pokemon Center security baseline is active, but no notification was sent; leaving previous state unset");
+                    return;
+                }
+            }
+
+            _pokemonCenterSecurityStateRepository.Set(nextState);
             LogInfo($"Pokemon Center security baseline saved: {snapshot.Summary.Replace("\n", " | ")}");
             return;
         }
 
         if (string.Equals(previous.Fingerprint, snapshot.Fingerprint, StringComparison.OrdinalIgnoreCase))
         {
+            _pokemonCenterSecurityStateRepository.Set(nextState);
             LogInfo("Pokemon Center security check unchanged");
             return;
         }
 
         var message = BuildPokemonCenterSecurityMessage(previous, snapshot);
+        if (!await NotifyPokemonCenterSecurity(settingsKey, message))
+        {
+            LogWarn("Pokemon Center security changed, but no notification was sent; leaving previous state unchanged");
+            return;
+        }
+
+        _pokemonCenterSecurityStateRepository.Set(nextState);
+    }
+
+    private async Task<bool> NotifyPokemonCenterSecurity(string settingsKey, string message)
+    {
+        var sent = false;
         var channelId = _tcgChannelSettingsRepository.GetChannelId(settingsKey);
         if (channelId != 0)
         {
             try
             {
                 await _discordClient.PostToChannel(channelId, message);
+                sent = true;
             }
             catch (Exception ex)
             {
@@ -299,19 +324,24 @@ public partial class BotService
             try
             {
                 await _discordClient.SendDirectMessage(userId, message);
+                sent = true;
             }
             catch (Exception ex)
             {
                 LogError($"Pokemon Center security DM failed for user {userId}: {ex.Message}");
             }
         }
+
+        return sent;
     }
 
-    private static string BuildPokemonCenterSecurityMessage(PokemonCenterSecurityState previous, PokemonCenterSecuritySnapshot current)
+    private static string BuildPokemonCenterSecurityMessage(PokemonCenterSecurityState? previous, PokemonCenterSecuritySnapshot current)
     {
-        var previousSummary = LimitBlock(previous.Summary, 700);
+        var previousSummary = previous == null
+            ? "No previous baseline existed. This active security/queue state was found on the first check."
+            : LimitBlock(previous.Summary, 700);
         var currentSummary = LimitBlock(current.Summary, 700);
-        var headline = current.QueueDetected
+        var headline = current.QueueDetected || current.CaptchaDetected
             ? "Pokemon Center security difference found - queue/security layer may be active."
             : "Pokemon Center security difference found.";
 
