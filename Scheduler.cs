@@ -8,6 +8,7 @@ using TimeZoneConverter;
 
 public partial class BotService
 {
+    private const int DiscordMessageSoftLimit = 1800;
     private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static string NormalizeStore(string store) => store.Replace(" 💸 Expensive", "", StringComparison.Ordinal).Trim();
@@ -124,33 +125,24 @@ public partial class BotService
         var userIds = _tcgChannelSettingsRepository.GetNotificationUserIds(settingsKey);
         if (userIds.Length == 0) return;
 
-        var lines = new List<string>();
-        foreach (var item in newProducts)
-        {
-            var line = $"- {item.Store}: {item.Product.Name} ({item.Product.Price})\n  {item.Product.Url.TrimEnd()}";
-            var candidate = $"New {label} item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines.Append(line))}";
-            if (candidate.Length > 1800) break;
-            lines.Add(line);
-        }
-
-        if (newProducts.Count > lines.Count)
-            lines.Add($"...and {newProducts.Count - lines.Count} more.");
-
-        var message = $"New {label} item{(newProducts.Count == 1 ? "" : "s")} added:\n{string.Join("\n", lines)}";
+        var messages = BuildNewProductMessages(label, newProducts);
         foreach (var userId in userIds)
         {
             try
             {
-                if (AppSettings.DryRun)
+                foreach (var message in messages)
                 {
-                    LogInfo($"[DRY RUN] DM to user {userId}: {message}");
-                    continue;
-                }
+                    if (AppSettings.DryRun)
+                    {
+                        LogInfo($"[DRY RUN] DM to user {userId}: {message}");
+                        continue;
+                    }
 
-                IUser? user = _discordBotClient.GetUser(userId);
-                user ??= await _discordBotClient.Rest.GetUserAsync(userId);
-                if (user != null)
-                    await user.SendMessageAsync(message);
+                    IUser? user = _discordBotClient.GetUser(userId);
+                    user ??= await _discordBotClient.Rest.GetUserAsync(userId);
+                    if (user != null)
+                        await user.SendMessageAsync(message);
+                }
             }
             catch (Exception ex)
             {
@@ -158,6 +150,39 @@ public partial class BotService
             }
         }
     }
+
+    private static List<string> BuildNewProductMessages(string label, List<(string Store, Product Product)> newProducts)
+    {
+        var title = $"New {label} item{(newProducts.Count == 1 ? "" : "s")} added";
+        var chunks = new List<List<string>>();
+        var current = new List<string>();
+
+        foreach (var item in newProducts)
+        {
+            var line = $"- {item.Store}: {item.Product.Name} ({item.Product.Price})\n  {item.Product.Url.TrimEnd()}";
+            var header = BuildNewProductHeader(title, chunks.Count + 1, multiPart: true);
+            var candidate = $"{header}\n{string.Join("\n", current.Append(line))}";
+
+            if (current.Count > 0 && candidate.Length > DiscordMessageSoftLimit)
+            {
+                chunks.Add(current);
+                current = [];
+            }
+
+            current.Add(line);
+        }
+
+        if (current.Count > 0)
+            chunks.Add(current);
+
+        var multiPart = chunks.Count > 1;
+        return chunks
+            .Select((lines, index) => $"{BuildNewProductHeader(title, index + 1, multiPart)}\n{string.Join("\n", lines)}")
+            .ToList();
+    }
+
+    private static string BuildNewProductHeader(string title, int part, bool multiPart) =>
+        multiPart ? $"{title} (part {part}):" : $"{title}:";
 
     private async Task RunPokemonPreorderJob()
     {
@@ -497,10 +522,10 @@ public partial class BotService
                 {
                     ("401Games", () => new _401GamesClient(_tcgSourceUrlRepository).GetPokemon()),
                     ("Atlas", () => new AtlasClient(_tcgSourceUrlRepository).GetPokemon()),
-                    ("Chimera", () => new ChimeraClient().GetPokemon()),
-                    ("EBGames", () => new EBGamesClient(browser).GetPokemon()),
+                    ("Chimera", () => new ChimeraClient(_tcgSourceUrlRepository).GetPokemon()),
+                    ("EBGames", () => new EBGamesClient(_tcgSourceUrlRepository, browser).GetPokemon()),
                     ("HouseOfCards", () => new HouseOfCardsClient(_tcgSourceUrlRepository).GetPokemon()),
-                    ("JJ", () => new JJClient(browser).GetProducts()),
+                    ("JJ", () => new JJClient(_tcgSourceUrlRepository, browser).GetProducts()),
                     ("Shopify Pokemon", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetPokemon(
                         "DarkFoxTCG",
                         "EnterTheBattlefield",
