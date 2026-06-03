@@ -103,6 +103,21 @@ public partial class BotService
             .ToList();
     }
 
+    private static bool ProductSetChanged(List<Search> latest, List<TcgResult> previous)
+    {
+        var latestKeys = latest
+            .SelectMany(s => s.Products.Select(p => ProductSnapshotKey(NormalizeStore(s.Store), p.Name, p.Url, p.Price)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var previousKeys = previous
+            .Select(p => ProductSnapshotKey(p.Store, p.ProductName, p.Url, p.Price))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return !latestKeys.SetEquals(previousKeys);
+    }
+
+    private static string ProductSnapshotKey(string store, string productName, string url, string price) =>
+        $"{ProductKey(store, productName, url)}||{price.Trim().ToLowerInvariant()}";
+
     private async Task NotifyNewProducts(string label, string settingsKey, List<(string Store, Product Product)> newProducts)
     {
         if (newProducts.Count == 0) return;
@@ -219,12 +234,17 @@ public partial class BotService
             preorderResults,
             _tcgProductGroupRepository.GetAll(filterGame)));
         var newPreorderProducts = GetNewProducts(preorderDiscordFiltered, previousPreorderResults);
+        var preorderProductsChanged = ProductSetChanged(preorderDiscordFiltered, previousPreorderResults);
         var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
 
         try
         {
-            if (preorderChannelId != 0)
+            if (preorderChannelId != 0 && preorderDiscordFiltered.Any() && preorderProductsChanged)
                 await _discordClient.PostWebHook(preorderChannelId, preorderDiscordFiltered);
+            else if (preorderChannelId != 0 && preorderDiscordFiltered.Any())
+                LogInfo($"{label} Discord post skipped; products unchanged");
+            else if (preorderChannelId != 0)
+                LogInfo($"{label} post skipped; all products were filtered");
             else
                 LogWarn("Pre-order TCG channel is not configured; skipping Discord post");
         }
@@ -513,11 +533,14 @@ public partial class BotService
                 var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
                 var divertedPreorders = ApplyDiscordFilters("preorder", splitPokemonResults.Preorders);
                 var newPokemonProducts = GetNewProducts(discordFiltered, previousPokemonResults);
+                var pokemonProductsChanged = ProductSetChanged(discordFiltered, previousPokemonResults);
                 var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
                 try
                 {
-                    if (pokemonChannelId != 0 && discordFiltered.Any())
+                    if (pokemonChannelId != 0 && discordFiltered.Any() && pokemonProductsChanged)
                         await _discordClient.PostWebHook(pokemonChannelId, discordFiltered);
+                    else if (pokemonChannelId != 0 && discordFiltered.Any())
+                        LogInfo("Pokemon TCG Discord post skipped; products unchanged");
                     else if (pokemonChannelId != 0)
                         LogInfo("Pokemon TCG post skipped; all products were filtered or diverted");
                     else
@@ -575,11 +598,14 @@ public partial class BotService
                 var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
                 var divertedGundamPreorders = ApplyDiscordFilters("preorder", splitGundamResults.Preorders);
                 var newGundamProducts = GetNewProducts(gundamDiscordFiltered, previousGundamResults);
+                var gundamProductsChanged = ProductSetChanged(gundamDiscordFiltered, previousGundamResults);
                 var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
                 try
                 {
-                    if (gundamChannelId != 0 && gundamDiscordFiltered.Any())
+                    if (gundamChannelId != 0 && gundamDiscordFiltered.Any() && gundamProductsChanged)
                         await _discordClient.PostWebHook(gundamChannelId, gundamDiscordFiltered);
+                    else if (gundamChannelId != 0 && gundamDiscordFiltered.Any())
+                        LogInfo("Gundam TCG Discord post skipped; products unchanged");
                     else if (gundamChannelId != 0)
                         LogInfo("Gundam TCG post skipped; all products were filtered or diverted");
                     else
