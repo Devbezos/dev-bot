@@ -207,7 +207,7 @@ public partial class BotService : BackgroundService
                     {
                         await message.ModifyAsync(p => p.Embed = embed);
                     }
-                    catch (Discord.Net.HttpException ex) when (ex.DiscordCode == 50006)
+                    catch (Discord.Net.HttpException ex) when (ex.DiscordCode.HasValue && (int)ex.DiscordCode.Value == 50006)
                     {
                         // Cannot send an empty message — ignore and continue
                         LogWarn($"EditEmbedMessageAsync: Discord returned 50006 (empty message) for channel {channelId}, message {messageId}; ignoring");
