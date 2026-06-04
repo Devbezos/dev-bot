@@ -336,7 +336,7 @@ public partial class BotService
         if (previous.QueueDetected == currentSecurityDetected)
         {
             _pokemonCenterSecurityStateRepository.Set(nextState);
-            LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")}");
+            LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")} — {snapshot.Summary.Replace("\n", " | ")}");
             return;
         }
 
