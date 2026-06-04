@@ -1,6 +1,6 @@
-using dev_library.Data;
-using dev_library.Data.Discord;
-using dev_refined.Clients;
+using DevClient.Data;
+using DevClient.Data.Discord;
+using DevClient.Clients;
 
 namespace dev_bot_tests.Tests
 {
@@ -265,3 +265,9 @@ namespace dev_bot_tests.Tests
         }
     }
 }
+
+
+
+
+
+

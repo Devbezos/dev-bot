@@ -1,6 +1,6 @@
-using dev_library.Data;
-using dev_refined;
-using dev_refined.Clients;
+using DevClient.Data;
+using DevClient;
+using DevClient.Clients;
 using Moq;
 using Newtonsoft.Json;
 
@@ -129,3 +129,9 @@ namespace dev_bot_tests.Tests
         }
     }
 }
+
+
+
+
+
+

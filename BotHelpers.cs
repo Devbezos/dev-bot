@@ -1,4 +1,4 @@
-using dev_library.Data;
+using DevClient.Data;
 using Discord;
 using Discord.Audio;
 using Discord.WebSocket;
@@ -47,6 +47,12 @@ public partial class BotService
     {
         LogInfo($"Replying to message {messageId} in channel {channelId}");
         var channel = await _discordBotClient.GetChannelAsync(channelId) as SocketTextChannel;
+        if (channel == null)
+        {
+            LogWarn($"Channel {channelId} not found");
+            return;
+        }
+
         var message = await channel.GetMessageAsync(messageId) as IUserMessage;
 
         if (message == null)
@@ -106,3 +112,9 @@ public partial class BotService
     private void LogError(string msg, [CallerMemberName] string method = "") =>
         Serilog.Log.ForContext("SourceContext", $"BotService.{method}").Error("{Message}", msg);
 }
+
+
+
+
+
+

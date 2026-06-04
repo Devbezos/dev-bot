@@ -1,15 +1,14 @@
-using dev_library.Clients;
-using dev_library.Data;
-using dev_library.Data.Discord;
-using dev_library.Data.Fitness;
-using dev_refined;
-using dev_refined.Clients;
+using DevClient.Clients;
+using DevClient.Data;
+using DevClient.Data.Discord;
+using DevClient.Data.Fitness;
+using DevClient;
 using Discord;
 using Discord.WebSocket;
 using Microsoft.Extensions.Hosting;
 using Serilog.Events;
 using System.Collections.Concurrent;
-using ICustomDiscordClient = dev_refined.Clients.IDiscordClient;
+using ICustomDiscordClient = DevClient.Clients.IDiscordClient;
 
 public partial class BotService : BackgroundService
 {
@@ -260,3 +259,9 @@ public partial class BotService : BackgroundService
         return Task.CompletedTask;
     }
 }
+
+
+
+
+
+

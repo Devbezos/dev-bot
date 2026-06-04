@@ -1,7 +1,7 @@
-using dev_library.Data;
-using dev_refined;
-using dev_refined.Clients;
-using dev_refined.Data;
+using DevClient.Data;
+using DevClient;
+using DevClient.Clients;
+using DevClient.Data.WoW;
 using Moq;
 
 namespace dev_bot_tests.Tests
@@ -130,3 +130,9 @@ namespace dev_bot_tests.Tests
         }
     }
 }
+
+
+
+
+
+

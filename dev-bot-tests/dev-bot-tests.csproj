@@ -23,8 +23,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\dev-library\dev-library.csproj" />
     <ProjectReference Include="..\DevBot.csproj" />
   </ItemGroup>
 
 </Project>
+
+
+
+
+
+

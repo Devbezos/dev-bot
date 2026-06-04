@@ -1,7 +1,7 @@
-using dev_library;
-using dev_library.Data;
-using dev_library.Data.Discord;
-using dev_library.Data.WoW.Raidbots;
+using DevClient;
+using DevClient.Data;
+using DevClient.Data.Discord;
+using DevClient.Data.WoW.Raidbots;
 using Discord;
 using Discord.WebSocket;
 
@@ -60,14 +60,24 @@ public partial class BotService
                 var reportId = raidBotsUrl.Split('/').Last();
                 LogInfo($"Processing {raidBotsUrl}");
 
-                var isWoWUtils = guild.Droptimizer?.Source?.Equals("wowutils", StringComparison.OrdinalIgnoreCase) == true;
+                var droptimizer = guild.Droptimizer;
+                var isWoWUtils = droptimizer?.Source?.Equals("wowutils", StringComparison.OrdinalIgnoreCase) == true;
 
                 if (isWoWUtils)
                 {
+                    if (droptimizer == null ||
+                        string.IsNullOrWhiteSpace(droptimizer.GroupId) ||
+                        string.IsNullOrWhiteSpace(droptimizer.SessionCookie))
+                    {
+                        await SendDmAsync(message.Author, "WoW Utils is missing configuration for this guild. Please ask an admin to check the bot settings.");
+                        await DeleteAsync(message);
+                        return;
+                    }
+
                     var report = await _wowUtilsClient.GetDroptimizerReport(reportId);
                     var characterSlug = _wowUtilsClient.GetCharacterSlug(report);
                     var importResult = await _wowUtilsClient.ImportDroptimizer(
-                        guild.Droptimizer.GroupId, characterSlug, report, reportId, guild.Droptimizer.SessionCookie);
+                        droptimizer.GroupId, characterSlug, report, reportId, droptimizer.SessionCookie);
 
                     if (importResult?.Import == null)
                     {
@@ -119,3 +129,9 @@ public partial class BotService
         }
     }
 }
+
+
+
+
+
+

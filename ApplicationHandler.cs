@@ -1,6 +1,6 @@
-using dev_library;
-using dev_library.Data;
-using dev_library.Data.Discord;
+using DevClient;
+using DevClient.Data;
+using DevClient.Data.Discord;
 using Discord;
 using Discord.WebSocket;
 
@@ -127,3 +127,9 @@ public partial class BotService
         _appChannelRepository.Remove(channelId);
     }
 }
+
+
+
+
+
+

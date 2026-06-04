@@ -1,5 +1,5 @@
-using dev_library;
-using dev_library.Data;
+using DevClient;
+using DevClient.Data;
 using Discord;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,8 +32,8 @@ var host = Host.CreateDefaultBuilder(args)
     .ConfigureServices((_, services) =>
     {
         var connStr = AppSettings.MySql.ConnectionString;
-        services.AddDevLibraryRepositories(connStr);
-        services.AddDevLibraryClients();
+        services.AddDevClientRepositories(connStr);
+        services.AddDevClientClients();
 
         services.AddSingleton(new DiscordSocketClient(new DiscordSocketConfig
         {
@@ -52,4 +52,10 @@ var host = Host.CreateDefaultBuilder(args)
     .Build();
 
 await host.RunAsync();
+
+
+
+
+
+
 

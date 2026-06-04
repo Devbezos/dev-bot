@@ -1,7 +1,7 @@
-using dev_library.Clients;
-using dev_library.Clients.Fitness;
-using dev_library.Data;
-using dev_library.Data.Fitness;
+using DevClient.Clients;
+using DevClient.Clients.Fitness;
+using DevClient.Data;
+using DevClient.Data.Fitness;
 using Discord;
 using System.Text.RegularExpressions;
 using TimeZoneConverter;
@@ -255,9 +255,7 @@ public partial class BotService
         var previousPreorderResults = _tcgRepository.GetLatestRun(resultsKey);
         if (previousPreorderResults.Count == 0)
             previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
-        var preorderDiscordFiltered = ApplyDiscordFilters("preorder", TcgMsrpPriceFilter.HideOverDoubleMsrp(
-            preorderResults,
-            _tcgProductGroupRepository.GetAll(filterGame)));
+        var preorderDiscordFiltered = ApplyDiscordFilters("preorder", preorderResults);
         var newPreorderProducts = GetNewProducts(preorderDiscordFiltered, previousPreorderResults);
         var preorderProductsChanged = ProductSetChanged(preorderDiscordFiltered, previousPreorderResults);
         var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
@@ -550,9 +548,7 @@ public partial class BotService
                     }
                 }
 
-                var filtered = TcgMsrpPriceFilter.HideOverDoubleMsrp(
-                    PokemonPriceFilter.Apply(tcgResults),
-                    _tcgProductGroupRepository.GetAll("pokemon"));
+                var filtered = PokemonPriceFilter.Apply(tcgResults);
                 var splitPokemonResults = TcgPreorderClassifier.Split(filtered);
                 var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
                 var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
@@ -615,9 +611,7 @@ public partial class BotService
                     }
                 }
 
-                var filteredGundamResults = TcgMsrpPriceFilter.HideOverDoubleMsrp(
-                    gundamResults,
-                    _tcgProductGroupRepository.GetAll("gundam"));
+                var filteredGundamResults = gundamResults;
                 var splitGundamResults = TcgPreorderClassifier.Split(filteredGundamResults);
                 var previousGundamResults = _tcgRepository.GetLatestRun("gundam");
                 var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
@@ -709,3 +703,9 @@ public partial class BotService
         }
     }
 }
+
+
+
+
+
+
