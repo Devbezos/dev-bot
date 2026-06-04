@@ -43,7 +43,6 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.0" />
     <PackageReference Include="Microsoft.Playwright" Version="1.60.0" />
-    <PackageReference Include="MySqlConnector" Version="2.4.0" />
     <PackageReference Include="naudio" Version="2.2.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="OpenAI" Version="2.3.0" />
@@ -59,6 +58,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\dev-client\DevClient.csproj" />
+    <ProjectReference Include="..\dev-api\dev-api.csproj" />
   </ItemGroup>
 
 </Project>
