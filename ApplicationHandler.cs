@@ -93,30 +93,8 @@ public partial class BotService
             await textChannel.ModifyAsync(p => p.CategoryId = archiveCategoryId);
             LogInfo($"Application denied, channel {channelId} moved to archive, syncing permissions");
 
-            var archiveCategory = await ((IGuild)textChannel.Guild).GetChannelAsync(archiveCategoryId, CacheMode.AllowDownload);
-            if (archiveCategory == null)
-            {
-                LogWarn($"Archive category {archiveCategoryId} not found, skipping permission sync");
-            }
-            else
-            {
-                foreach (var overwrite in archiveCategory.PermissionOverwrites)
-                {
-                    if (overwrite.TargetType == PermissionTarget.Role)
-                    {
-                        var role = textChannel.Guild.GetRole(overwrite.TargetId);
-                        if (role != null)
-                            await textChannel.AddPermissionOverwriteAsync(role, overwrite.Permissions);
-                    }
-                    else
-                    {
-                        var user = textChannel.Guild.GetUser(overwrite.TargetId);
-                        if (user != null)
-                            await textChannel.AddPermissionOverwriteAsync(user, overwrite.Permissions);
-                    }
-                }
-                LogInfo($"Permissions synced for channel {channelId} ({archiveCategory.PermissionOverwrites.Count} overwrites applied)");
-            }
+            await textChannel.SyncPermissionsAsync();
+            LogInfo($"Permissions synced for channel {channelId}");
         }
         else
         {
