@@ -116,51 +116,112 @@ public partial class BotService : BackgroundService
         LogInfo("Bot ready");
         DiscordClient.SendMessageAsync = async (channelId, content) =>
         {
-            if (AppSettings.DryRun) { LogInfo($"[DRY RUN] Send to channel {channelId}: {content}"); return; }
-            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
-            if (channel != null)
-                await channel.SendMessageAsync(content);
+            try
+            {
+                if (string.IsNullOrWhiteSpace(content)) { LogWarn($"SendMessageAsync: empty content for channel {channelId}, skipping"); return; }
+                if (AppSettings.DryRun) { LogInfo($"[DRY RUN] Send to channel {channelId}: {content}"); return; }
+                var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+                if (channel != null)
+                    await channel.SendMessageAsync(content);
+                else
+                    LogWarn($"SendMessageAsync: channel {channelId} not found");
+            }
+            catch (Discord.Net.HttpException ex)
+            {
+                LogError($"SendMessageAsync failed for channel {channelId}: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"SendMessageAsync unexpected error for channel {channelId}: {ex.Message}");
+            }
         };
 
         DiscordClient.SendMessageWithIdAsync = async (channelId, content) =>
         {
-            if (AppSettings.DryRun)
+            try
             {
-                LogInfo($"[DRY RUN] Send (with id) to channel {channelId}: {content}");
+                if (string.IsNullOrWhiteSpace(content)) { LogWarn($"SendMessageWithIdAsync: empty content for channel {channelId}, skipping"); return 0; }
+                if (AppSettings.DryRun)
+                {
+                    LogInfo($"[DRY RUN] Send (with id) to channel {channelId}: {content}");
+                    return 0;
+                }
+                var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+                if (channel == null) { LogWarn($"SendMessageWithIdAsync: channel {channelId} not found"); return 0; }
+                var message = await channel.SendMessageAsync(content);
+                return message.Id;
+            }
+            catch (Discord.Net.HttpException ex)
+            {
+                LogError($"SendMessageWithIdAsync failed for channel {channelId}: {ex.Message}");
                 return 0;
             }
-            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
-            if (channel == null) return 0;
-            var message = await channel.SendMessageAsync(content);
-            return message.Id;
+            catch (Exception ex)
+            {
+                LogError($"SendMessageWithIdAsync unexpected error for channel {channelId}: {ex.Message}");
+                return 0;
+            }
         };
 
         DiscordClient.EditMessageAsync = async (channelId, messageId, content) =>
         {
-            if (AppSettings.DryRun)
+            try
             {
-                LogInfo($"[DRY RUN] Edit message {messageId} in channel {channelId}: {content}");
-                return;
+                if (AppSettings.DryRun)
+                {
+                    LogInfo($"[DRY RUN] Edit message {messageId} in channel {channelId}: {content}");
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(content)) { LogWarn($"EditMessageAsync: empty content for channel {channelId}, skipping"); return; }
+                var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+                if (channel == null) { LogWarn($"EditMessageAsync: channel {channelId} not found"); return; }
+                var message = await channel.GetMessageAsync(messageId) as IUserMessage;
+                if (message != null)
+                    await message.ModifyAsync(p => p.Content = content);
             }
-            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
-            if (channel == null) return;
-            var message = await channel.GetMessageAsync(messageId) as IUserMessage;
-            if (message != null)
-                await message.ModifyAsync(p => p.Content = content);
+            catch (Discord.Net.HttpException ex)
+            {
+                LogError($"EditMessageAsync failed for channel {channelId}, message {messageId}: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"EditMessageAsync unexpected error for channel {channelId}, message {messageId}: {ex.Message}");
+            }
         };
 
         DiscordClient.EditEmbedMessageAsync = async (channelId, messageId, embed) =>
         {
-            if (AppSettings.DryRun)
+            try
             {
-                LogInfo($"[DRY RUN] Edit embed message {messageId} in channel {channelId}: {embed.Title}");
-                return;
+                if (AppSettings.DryRun)
+                {
+                    LogInfo($"[DRY RUN] Edit embed message {messageId} in channel {channelId}: {embed?.Title}");
+                    return;
+                }
+                var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+                if (channel == null) { LogWarn($"EditEmbedMessageAsync: channel {channelId} not found"); return; }
+                var message = await channel.GetMessageAsync(messageId) as IUserMessage;
+                if (message != null)
+                {
+                    try
+                    {
+                        await message.ModifyAsync(p => p.Embed = embed);
+                    }
+                    catch (Discord.Net.HttpException ex) when (ex.DiscordCode == 50006)
+                    {
+                        // Cannot send an empty message — ignore and continue
+                        LogWarn($"EditEmbedMessageAsync: Discord returned 50006 (empty message) for channel {channelId}, message {messageId}; ignoring");
+                    }
+                }
             }
-            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
-            if (channel == null) return;
-            var message = await channel.GetMessageAsync(messageId) as IUserMessage;
-            if (message != null)
-                await message.ModifyAsync(p => p.Embed = embed);
+            catch (Discord.Net.HttpException ex)
+            {
+                LogError($"EditEmbedMessageAsync failed for channel {channelId}, message {messageId}: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"EditEmbedMessageAsync unexpected error for channel {channelId}, message {messageId}: {ex.Message}");
+            }
         };
 
         DiscordClient.GetLatestBotMessageIdAsync = async (channelId) =>
@@ -193,9 +254,23 @@ public partial class BotService : BackgroundService
 
         DiscordClient.SendEmbedAsync = async (channelId, embed) =>
         {
-            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
-            if (channel != null)
-                await channel.SendMessageAsync(embed: embed);
+            try
+            {
+                if (embed == null) { LogWarn($"SendEmbedAsync: null embed for channel {channelId}, skipping"); return; }
+                var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+                if (channel != null)
+                    await channel.SendMessageAsync(embed: embed);
+                else
+                    LogWarn($"SendEmbedAsync: channel {channelId} not found");
+            }
+            catch (Discord.Net.HttpException ex)
+            {
+                LogError($"SendEmbedAsync failed for channel {channelId}: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                LogError($"SendEmbedAsync unexpected error for channel {channelId}: {ex.Message}");
+            }
         };
 
         DiscordClient.SendDirectMessageToUserAsync = async (userId, content) =>
