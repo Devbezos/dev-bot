@@ -332,15 +332,12 @@ public partial class BotService
             previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
         var preorderDiscordFiltered = ApplyDiscordFilters("preorder", preorderResults);
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderDiscordFiltered, previousPreorderResults);
-        var preorderProductsChanged = ProductSetChanged(preorderDiscordFiltered, previousPreorderResults);
         var preorderChannelId = GetPreorderChannelId(settingsKey);
 
         try
         {
-            if (preorderChannelId != 0 && preorderDiscordFiltered.Any() && preorderProductsChanged)
+            if (preorderChannelId != 0 && preorderDiscordFiltered.Any())
                 await _discordClient.PostWebHook(preorderChannelId, preorderDiscordFiltered);
-            else if (preorderChannelId != 0 && preorderDiscordFiltered.Any())
-                LogInfo($"{label} Discord post skipped; products unchanged");
             else if (preorderChannelId != 0)
                 LogInfo($"{label} post skipped; all products were filtered");
             else
@@ -367,15 +364,12 @@ public partial class BotService
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderResults, previousPreorderResults);
         var mergedPreorders = TcgPreorderClassifier.Merge(
             preorderResults.Concat(TcgPreorderClassifier.FromTcgResults(previousPreorderResults)));
-        var preorderProductsChanged = ProductSetChanged(mergedPreorders, previousPreorderResults);
         var preorderChannelId = GetPreorderChannelId(settingsKey);
 
         try
         {
-            if (preorderChannelId != 0 && mergedPreorders.Any() && preorderProductsChanged)
+            if (preorderChannelId != 0 && mergedPreorders.Any())
                 await _discordClient.PostWebHook(preorderChannelId, mergedPreorders);
-            else if (preorderChannelId != 0 && mergedPreorders.Any())
-                LogInfo($"{label} Discord post skipped; products unchanged");
             else if (preorderChannelId != 0)
                 LogInfo($"{label} post skipped; all products were filtered");
             else
@@ -795,7 +789,6 @@ public partial class BotService
         }
     }
 }
-
 
 
 
