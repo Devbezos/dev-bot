@@ -251,6 +251,14 @@ public partial class BotService
     private static string BuildNewProductHeader(string title, int part, bool multiPart) =>
         multiPart ? $"{title} (part {part}):" : $"{title}:";
 
+    private ulong GetPreorderChannelId(string settingsKey)
+    {
+        var channelId = _tcgChannelSettingsRepository.GetChannelId(settingsKey);
+        if (channelId == 0 && !settingsKey.Equals("preorder", StringComparison.OrdinalIgnoreCase))
+            channelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
+        return channelId;
+    }
+
     private async Task RunPokemonPreorderJob()
     {
         var preorderResults = new List<Search>();
@@ -325,7 +333,7 @@ public partial class BotService
         var preorderDiscordFiltered = ApplyDiscordFilters("preorder", preorderResults);
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderDiscordFiltered, previousPreorderResults);
         var preorderProductsChanged = ProductSetChanged(preorderDiscordFiltered, previousPreorderResults);
-        var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
+        var preorderChannelId = GetPreorderChannelId(settingsKey);
 
         try
         {
@@ -336,7 +344,7 @@ public partial class BotService
             else if (preorderChannelId != 0)
                 LogInfo($"{label} post skipped; all products were filtered");
             else
-                LogWarn("Pre-order TCG channel is not configured; skipping Discord post");
+                LogWarn($"{label} channel is not configured; skipping Discord post");
         }
         catch (Exception ex)
         {
@@ -358,8 +366,25 @@ public partial class BotService
         var previousPreorderResults = _tcgRepository.GetLatestRun(resultsKey);
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderResults, previousPreorderResults);
         var mergedPreorders = TcgPreorderClassifier.Merge(
-            TcgPreorderClassifier.FromTcgResults(previousPreorderResults)
-                .Concat(preorderResults));
+            preorderResults.Concat(TcgPreorderClassifier.FromTcgResults(previousPreorderResults)));
+        var preorderProductsChanged = ProductSetChanged(mergedPreorders, previousPreorderResults);
+        var preorderChannelId = GetPreorderChannelId(settingsKey);
+
+        try
+        {
+            if (preorderChannelId != 0 && mergedPreorders.Any() && preorderProductsChanged)
+                await _discordClient.PostWebHook(preorderChannelId, mergedPreorders);
+            else if (preorderChannelId != 0 && mergedPreorders.Any())
+                LogInfo($"{label} Discord post skipped; products unchanged");
+            else if (preorderChannelId != 0)
+                LogInfo($"{label} post skipped; all products were filtered");
+            else
+                LogWarn($"{label} channel is not configured; skipping Discord post");
+        }
+        catch (Exception ex)
+        {
+            LogError($"{label} post failed for channel {preorderChannelId}: {ex.Message}");
+        }
 
         if (newPreorderProducts.Any())
             await NotifyNewProducts(label, settingsKey, newPreorderProducts);
@@ -770,7 +795,6 @@ public partial class BotService
         }
     }
 }
-
 
 
 
