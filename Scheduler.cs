@@ -3,6 +3,7 @@ using DevClient.Clients.Fitness;
 using DevClient.Data;
 using DevClient.Data.Fitness;
 using Discord;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using TimeZoneConverter;
 
@@ -10,6 +11,9 @@ public partial class BotService
 {
     private const int DiscordMessageSoftLimit = 1800;
     private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly object TcgNotificationStateLock = new();
+    private static readonly JsonSerializerOptions TcgNotificationJsonOptions = new() { WriteIndented = true };
+    private static string TcgNotificationStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-notified-products.json");
 
     private static string NormalizeStore(string store) => store.Replace(" 💸 Expensive", "", StringComparison.Ordinal).Trim();
 
@@ -102,6 +106,69 @@ public partial class BotService
             .GroupBy(x => ProductKey(x.Store, x.Product.Name, x.Product.Url), StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
             .ToList();
+    }
+
+    private static List<(string Store, Product Product)> GetFirstSaleProducts(string settingsKey, List<Search> latest, List<TcgResult> previous)
+    {
+        var latestItems = latest
+            .SelectMany(s => s.Products.Select(p => (Store: NormalizeStore(s.Store), Product: p)))
+            .GroupBy(x => ProductKey(x.Store, x.Product.Name, x.Product.Url), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+        lock (TcgNotificationStateLock)
+        {
+            var state = LoadTcgNotificationState();
+            if (!state.TryGetValue(settingsKey, out var seenKeys))
+            {
+                seenKeys = previous
+                    .Select(p => ProductKey(p.Store, p.ProductName, p.Url))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                state[settingsKey] = seenKeys;
+            }
+
+            var firstSaleProducts = latestItems
+                .Where(x => !seenKeys.Contains(ProductKey(x.Store, x.Product.Name, x.Product.Url)))
+                .ToList();
+
+            foreach (var item in latestItems)
+                seenKeys.Add(ProductKey(item.Store, item.Product.Name, item.Product.Url));
+
+            SaveTcgNotificationState(state);
+            return firstSaleProducts;
+        }
+    }
+
+    private static Dictionary<string, HashSet<string>> LoadTcgNotificationState()
+    {
+        if (!File.Exists(TcgNotificationStatePath))
+            return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        var json = File.ReadAllText(TcgNotificationStatePath);
+        if (string.IsNullOrWhiteSpace(json))
+            return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        var raw = JsonSerializer.Deserialize<Dictionary<string, string[]>>(json)
+            ?? new Dictionary<string, string[]>();
+
+        return raw.ToDictionary(
+            x => x.Key,
+            x => x.Value.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void SaveTcgNotificationState(Dictionary<string, HashSet<string>> state)
+    {
+        var directory = Path.GetDirectoryName(TcgNotificationStatePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var raw = state.ToDictionary(
+            x => x.Key,
+            x => x.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+
+        File.WriteAllText(TcgNotificationStatePath, JsonSerializer.Serialize(raw, TcgNotificationJsonOptions));
     }
 
     private static bool ProductSetChanged(List<Search> latest, List<TcgResult> previous)
@@ -256,7 +323,7 @@ public partial class BotService
         if (previousPreorderResults.Count == 0)
             previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
         var preorderDiscordFiltered = ApplyDiscordFilters("preorder", preorderResults);
-        var newPreorderProducts = GetNewProducts(preorderDiscordFiltered, previousPreorderResults);
+        var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderDiscordFiltered, previousPreorderResults);
         var preorderProductsChanged = ProductSetChanged(preorderDiscordFiltered, previousPreorderResults);
         var preorderChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
 
@@ -289,7 +356,7 @@ public partial class BotService
         if (!preorderResults.Any()) return;
 
         var previousPreorderResults = _tcgRepository.GetLatestRun(resultsKey);
-        var newPreorderProducts = GetNewProducts(preorderResults, previousPreorderResults);
+        var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderResults, previousPreorderResults);
         var mergedPreorders = TcgPreorderClassifier.Merge(
             TcgPreorderClassifier.FromTcgResults(previousPreorderResults)
                 .Concat(preorderResults));
@@ -553,7 +620,7 @@ public partial class BotService
                 var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
                 var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
                 var divertedPreorders = ApplyDiscordFilters("preorder", splitPokemonResults.Preorders);
-                var newPokemonProducts = GetNewProducts(discordFiltered, previousPokemonResults);
+                var newPokemonProducts = GetFirstSaleProducts("pokemon", discordFiltered, previousPokemonResults);
                 var pokemonProductsChanged = ProductSetChanged(discordFiltered, previousPokemonResults);
                 var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
                 try
@@ -616,7 +683,7 @@ public partial class BotService
                 var previousGundamResults = _tcgRepository.GetLatestRun("gundam");
                 var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
                 var divertedGundamPreorders = ApplyDiscordFilters("preorder", splitGundamResults.Preorders);
-                var newGundamProducts = GetNewProducts(gundamDiscordFiltered, previousGundamResults);
+                var newGundamProducts = GetFirstSaleProducts("gundam", gundamDiscordFiltered, previousGundamResults);
                 var gundamProductsChanged = ProductSetChanged(gundamDiscordFiltered, previousGundamResults);
                 var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
                 try
@@ -703,7 +770,6 @@ public partial class BotService
         }
     }
 }
-
 
 
 
