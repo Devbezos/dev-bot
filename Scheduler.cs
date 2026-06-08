@@ -548,6 +548,13 @@ public partial class BotService
         if (value.Length <= maxLength) return value;
         return value[..Math.Max(0, maxLength - 20)] + "\n...truncated";
     }
+
+    private static bool HasFitnessWeightSheet(GoogleHealthUserSettings settings) =>
+        !string.IsNullOrWhiteSpace(settings.WeightSheetId)
+        && !string.IsNullOrWhiteSpace(settings.WeightSheetName)
+        && !string.IsNullOrWhiteSpace(settings.WeightSheetDateColumn)
+        && !string.IsNullOrWhiteSpace(settings.WeightSheetWeightColumn)
+        && !string.IsNullOrWhiteSpace(AppSettings.FitnessWeightSheet.CredentialsPath);
  
     public async Task RunScheduledTick(CancellationToken cancellationToken)
     {
@@ -626,7 +633,25 @@ public partial class BotService
                 {
                     if (!credsByUsername.TryGetValue(dbUser.Username, out var weeklyCreds)) continue;
                     weeklyCreds.ChannelId = dbUser.ChannelId;
-                    try { await new GoogleHealthClient(weeklyCreds).PostWeeklyFitnessStats(); weeklyPostedCount++; }
+                    try
+                    {
+                        var healthClient = new GoogleHealthClient(weeklyCreds);
+                        await healthClient.PostWeeklyFitnessStats();
+                        weeklyPostedCount++;
+
+                        if (HasFitnessWeightSheet(weeklyCreds))
+                        {
+                            var currentWeightLbs = await healthClient.GetMostRecentWeightLbs();
+                            if (currentWeightLbs.HasValue)
+                            {
+                                var updated = await _googleSheetsClient.UpdateFitnessWeight(weeklyCreds, currentWeightLbs.Value, now);
+                                if (!updated)
+                                    LogWarn($"Fitness weekly weight sheet skipped for {dbUser.Username}: no matching date row found for {now:yyyy-MM-dd}");
+                            }
+                            else
+                                LogWarn($"Fitness weekly weight sheet skipped for {dbUser.Username}: no recent weight found");
+                        }
+                    }
                     catch (Exception ex) { LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}"); }
                 }
                 if (weeklyPostedCount > 0)
@@ -825,6 +850,3 @@ public partial class BotService
         }
     }
 }
-
-
-

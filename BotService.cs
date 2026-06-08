@@ -87,7 +87,6 @@ public partial class BotService : BackgroundService
         _appChannelRepository.EnsureTable();
         _guildRepository.EnsureTable();
         _fitnessRepository.EnsureTable();
-        _fitnessRepository.EnsureUsersTable(AppSettings.GoogleHealth);
         _jobRepository.EnsureTable();
         _tcgSourceUrlRepository.EnsureTable();
         _tcgHiddenItemRepository.EnsureTable();
