@@ -45,6 +45,33 @@ public class SchedulerNotificationTests : IDisposable
         Assert.Empty(secondPass);
     }
 
+    [Fact]
+    public void ShouldNotifyPokemonCenterSecurity_WhenInactiveBecomesActive_ReturnsTrue()
+    {
+        var previous = new PokemonCenterSecurityState(
+            "pokemon_center_ca",
+            "old",
+            false,
+            "Queue detected: no",
+            DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.True(InvokeShouldNotifyPokemonCenterSecurity(previous, true, "new"));
+    }
+
+    [Fact]
+    public void ShouldNotifyPokemonCenterSecurity_WhenActiveFingerprintChanges_ReturnsTrue()
+    {
+        var previous = new PokemonCenterSecurityState(
+            "pokemon_center_ca",
+            "old",
+            true,
+            "Queue detected: yes",
+            DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.True(InvokeShouldNotifyPokemonCenterSecurity(previous, true, "new"));
+        Assert.False(InvokeShouldNotifyPokemonCenterSecurity(previous, true, "old"));
+    }
+
     public void Dispose() => DeleteStateFile();
 
     private static IReadOnlyCollection<object> InvokeGetFirstSaleProducts(
@@ -58,6 +85,18 @@ public class SchedulerNotificationTests : IDisposable
 
         var result = (System.Collections.IEnumerable)method!.Invoke(null, [settingsKey, latest, previous])!;
         return result.Cast<object>().ToArray();
+    }
+
+    private static bool InvokeShouldNotifyPokemonCenterSecurity(
+        PokemonCenterSecurityState previous,
+        bool currentSecurityDetected,
+        string currentFingerprint)
+    {
+        var method = typeof(BotService).GetMethod(
+            "ShouldNotifyPokemonCenterSecurity",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        return (bool)method!.Invoke(null, [previous, currentSecurityDetected, currentFingerprint])!;
     }
 
     private void DeleteStateFile()

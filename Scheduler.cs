@@ -419,10 +419,27 @@ public partial class BotService
         }
 
         var currentSecurityDetected = snapshot.QueueDetected || snapshot.CaptchaDetected;
+        var shouldNotifyActiveSecurity = ShouldNotifyPokemonCenterSecurity(previous, currentSecurityDetected, snapshot.Fingerprint);
         if (previous.QueueDetected == currentSecurityDetected)
         {
+            if (shouldNotifyActiveSecurity)
+            {
+                var message = BuildPokemonCenterSecurityMessage(
+                    "Pokemon Center queue/security is still active, but the page fingerprint changed.",
+                    previous,
+                    snapshot);
+                if (!await NotifyPokemonCenterSecurity(settingsKey, message))
+                {
+                    LogWarn("Pokemon Center queue/security changed while active, but no notification was sent; state will be retried");
+                    return;
+                }
+
+                LogInfo($"Pokemon Center queue/security active fingerprint changed; notification sent — {snapshot.Summary.Replace("\n", " | ")}");
+            }
+
             _pokemonCenterSecurityStateRepository.Set(nextState);
-            LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")} — {snapshot.Summary.Replace("\n", " | ")}");
+            if (!shouldNotifyActiveSecurity)
+                LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")} — {snapshot.Summary.Replace("\n", " | ")}");
             return;
         }
 
@@ -436,18 +453,24 @@ public partial class BotService
             snapshot.Summary,
             DateTime.UtcNow));
 
-        _pokemonCenterSecurityStateRepository.Set(nextState);
-
         if (!previous.QueueDetected && currentSecurityDetected)
         {
-            var message = BuildPokemonCenterSecurityActivatedMessage(previous, snapshot);
+            var message = BuildPokemonCenterSecurityMessage(
+                "Pokemon Center queue/security is now active.",
+                previous,
+                snapshot);
             if (!await NotifyPokemonCenterSecurity(settingsKey, message))
+            {
                 LogWarn("Pokemon Center queue/security turned on, but no notification was sent");
+                return;
+            }
         }
         else
         {
             LogInfo("Pokemon Center queue/security turned off; transition stored without notification");
         }
+
+        _pokemonCenterSecurityStateRepository.Set(nextState);
     }
 
     private async Task<bool> NotifyPokemonCenterSecurity(string settingsKey, string message)
@@ -487,13 +510,26 @@ public partial class BotService
         return sent;
     }
 
-    private static string BuildPokemonCenterSecurityActivatedMessage(PokemonCenterSecurityState previous, PokemonCenterSecuritySnapshot current)
+    private static bool ShouldNotifyPokemonCenterSecurity(
+        PokemonCenterSecurityState previous,
+        bool currentSecurityDetected,
+        string currentFingerprint)
+    {
+        return currentSecurityDetected
+            && (!previous.QueueDetected
+                || !string.Equals(previous.Fingerprint, currentFingerprint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string BuildPokemonCenterSecurityMessage(
+        string title,
+        PokemonCenterSecurityState previous,
+        PokemonCenterSecuritySnapshot current)
     {
         var previousSummary = LimitBlock(previous.Summary, 700);
         var currentSummary = LimitBlock(current.Summary, 700);
 
         return $"""
-            Pokemon Center queue/security is now active.
+            {title}
 
             Previous:
             ```text
