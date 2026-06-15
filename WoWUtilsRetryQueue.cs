@@ -201,7 +201,8 @@ public partial class BotService
     {
         try
         {
-            var user = _discordBotClient.GetUser(authorId) ?? await _discordBotClient.Rest.GetUserAsync(authorId);
+            IUser? user = _discordBotClient.GetUser(authorId);
+            user ??= await _discordBotClient.Rest.GetUserAsync(authorId);
             if (user != null)
                 await SendDmAsync(user, content);
         }
