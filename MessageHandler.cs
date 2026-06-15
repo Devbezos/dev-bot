@@ -54,6 +54,7 @@ public partial class BotService
         try
         {
             var itemUpgrades = new List<ItemUpgrade>();
+            var queuedRetryTimesUtc = new List<DateTime>();
 
             foreach (var raidBotsUrl in raidBotsUrls)
             {
@@ -66,27 +67,25 @@ public partial class BotService
                 if (isWoWUtils)
                 {
                     if (droptimizer == null ||
-                        string.IsNullOrWhiteSpace(droptimizer.GroupId) ||
-                        string.IsNullOrWhiteSpace(droptimizer.SessionCookie))
+                        string.IsNullOrWhiteSpace(droptimizer.ApiKey))
                     {
                         await SendDmAsync(message.Author, "WoW Utils is missing configuration for this guild. Please ask an admin to check the bot settings.");
                         await DeleteAsync(message);
                         return;
                     }
 
-                    var report = await _wowUtilsClient.GetDroptimizerReport(reportId);
-                    var characterSlug = _wowUtilsClient.GetCharacterSlug(report);
-                    var importResult = await _wowUtilsClient.ImportDroptimizer(
-                        droptimizer.GroupId, characterSlug, report, reportId, droptimizer.SessionCookie);
+                    var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
+                        message, guild, droptimizer, raidBotsUrl);
 
-                    if (importResult?.Import == null)
+                    if (outcome == WoWUtilsImportOutcome.Failed)
                     {
                         await SendDmAsync(message.Author, "Failed to import your droptimizer to WoW Utils. Please try again.");
                         await DeleteAsync(message);
                         return;
                     }
 
-                    LogInfo($"WoW Utils import successful: {importResult.Import.Id} for {importResult.Import.CharacterName} ({importResult.Import.CharacterSpec})");
+                    if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
+                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
                 }
                 else
                 {
@@ -110,7 +109,18 @@ public partial class BotService
             if (itemUpgrades.Count > 0)
                 await _googleSheetsClient.UpdateSheet(itemUpgrades);
 
-            await ReactAsync(message, new Emoji("✅"));
+            if (queuedRetryTimesUtc.Count > 0)
+            {
+                var nextRetryAtUtc = queuedRetryTimesUtc.Min();
+                await ReactAsync(message, new Emoji("⏳"));
+                await SendDmAsync(
+                    message.Author,
+                    $"WoW Utils rate-limited your droptimizer import, so I queued it for retry at {nextRetryAtUtc:MMMM d, yyyy h:mm tt} UTC.");
+            }
+            else
+            {
+                await ReactAsync(message, new Emoji("✅"));
+            }
 
             if (message.Author.Id == 341726443295866893)
             {
@@ -124,7 +134,7 @@ public partial class BotService
         catch (Exception ex)
         {
             await ReactAsync(message, new Emoji("❌"));
-            await SendDmAsync(message.Author, "WoWAudit is currently down. Please try again later. Also compliment epic on his tuna can");
+            await SendDmAsync(message.Author, "Droptimizer import is currently down. Please try again later.");
             LogError($"MonitorDroptimizers failed: {ex}");
         }
     }

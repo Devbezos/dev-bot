@@ -603,6 +603,8 @@ public partial class BotService
 
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
 
+            await ProcessQueuedWoWUtilsImports();
+
             var jobs = _jobRepository.GetAll();
             var globalEnabled = jobs.ToDictionary(j => j.Name, j => j.Enabled);
 
