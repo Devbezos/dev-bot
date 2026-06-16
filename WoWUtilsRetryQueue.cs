@@ -51,6 +51,13 @@ public partial class BotService
             LogWarn($"WoW Utils returned {(int?)ex.StatusCode ?? 0} for {raidBotsUrl}; queued retry at {retryAtUtc:O}");
             return (WoWUtilsImportOutcome.Queued, retryAtUtc);
         }
+        catch (WoWUtilsApiException ex)
+        {
+            var apiMessage = string.IsNullOrWhiteSpace(ex.ApiMessage) ? ex.Message : ex.ApiMessage;
+            LogWarn($"WoW Utils import rejected for {raidBotsUrl}: {apiMessage}");
+            await SendDmAsync(message.Author, apiMessage);
+            return (WoWUtilsImportOutcome.Failed, null);
+        }
     }
 
     private async Task ProcessQueuedWoWUtilsImports()

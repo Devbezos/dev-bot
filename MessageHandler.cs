@@ -79,7 +79,6 @@ public partial class BotService
 
                     if (outcome == WoWUtilsImportOutcome.Failed)
                     {
-                        await SendDmAsync(message.Author, "Failed to import your droptimizer to WoW Utils. Please try again.");
                         await DeleteAsync(message);
                         return;
                     }
