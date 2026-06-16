@@ -67,9 +67,10 @@ public partial class BotService
                 if (isWoWUtils)
                 {
                     if (droptimizer == null ||
-                        string.IsNullOrWhiteSpace(droptimizer.ApiKey))
+                        string.IsNullOrWhiteSpace(droptimizer.ApiKey) ||
+                        string.IsNullOrWhiteSpace(droptimizer.GroupId))
                     {
-                        await SendDmAsync(message.Author, "WoW Utils is missing configuration for this guild. Please ask an admin to check the bot settings.");
+                        await SendDmAsync(message.Author, "WoW Utils is missing the API key or groupId for this guild. Please ask an admin to check the bot settings.");
                         await DeleteAsync(message);
                         return;
                     }
