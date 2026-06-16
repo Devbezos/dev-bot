@@ -57,6 +57,7 @@ namespace dev_bot_tests.Tests
 
             Assert.True(result);
             mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => s.Contains("back online"))), Times.Once);
+            mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => s.Contains("<@&123456>"))), Times.Once);
         }
 
         [Fact]
@@ -126,6 +127,33 @@ namespace dev_bot_tests.Tests
 
             mockDiscord.Verify(d => d.PostToChannel(100ul, It.IsAny<string>()), Times.Once);
             mockDiscord.Verify(d => d.PostToChannel(200ul, It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task PostServerAvailability_WhenNoRolesConfigured_DoesNotPostEmptyRoleMention()
+        {
+            WriteCache("Down");
+
+            AppSettings.Guilds = new[]
+            {
+                new GuildSettings
+                {
+                    Name = "REFINED",
+                    Channels = new Dictionary<string, ulong> { ["general"] = 100ul },
+                    RolesToPing = Array.Empty<string>(),
+                    Features = new GuildFeatures { ServerAvailability = true }
+                }
+            };
+
+            var mockDiscord = new Mock<IDiscordClient>();
+            var mockBattleNet = new Mock<IBattleNetClient>();
+            mockBattleNet.Setup(b => b.GetZuljinData())
+                .ReturnsAsync(new BlizzardRealmResponse { Status = new Status { Name = "Up" } });
+
+            var sut = new RealmClient(mockDiscord.Object, mockBattleNet.Object);
+            await sut.PostServerAvailability();
+
+            mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => !s.Contains("<@&>"))), Times.Once);
         }
     }
 }
