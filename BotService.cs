@@ -25,6 +25,7 @@ public partial class BotService : BackgroundService
     private readonly RefinedClient _refinedClient;
     private readonly ICustomDiscordClient _discordClient;
     private readonly GoogleSheetsClient _googleSheetsClient;
+    private readonly IAutoReactionRepository _autoReactionRepository;
     private readonly IGuildRepository _guildRepository;
     private readonly IAppChannelRepository _appChannelRepository;
     private readonly IFitnessRepository _fitnessRepository;
@@ -41,6 +42,8 @@ public partial class BotService : BackgroundService
     private volatile bool _discordReady;
     private readonly SemaphoreSlim _schedulerTickLock = new(1, 1);
     private readonly ConcurrentDictionary<ulong, TrackedApplicationContext> _trackedApplicationMessages = new();
+    private AutoReactionRule[] _autoReactionRules = [];
+    private DateTime _autoReactionsLastLoadedUtc = DateTime.MinValue;
 
     public BotService(
         IWoWAuditClient wowAuditClient,
@@ -50,6 +53,7 @@ public partial class BotService : BackgroundService
         RefinedClient refinedClient,
         ICustomDiscordClient discordClient,
         GoogleSheetsClient googleSheetsClient,
+        IAutoReactionRepository autoReactionRepository,
         IGuildRepository guildRepository,
         IAppChannelRepository appChannelRepository,
         IFitnessRepository fitnessRepository,
@@ -71,6 +75,7 @@ public partial class BotService : BackgroundService
         _refinedClient       = refinedClient;
         _discordClient       = discordClient;
         _googleSheetsClient  = googleSheetsClient;
+        _autoReactionRepository = autoReactionRepository;
         _guildRepository     = guildRepository;
         _appChannelRepository = appChannelRepository;
         _fitnessRepository   = fitnessRepository;
@@ -92,6 +97,7 @@ public partial class BotService : BackgroundService
 
         _appChannelRepository.EnsureTable();
         _guildRepository.EnsureTable();
+        _autoReactionRepository.EnsureTable();
         _fitnessRepository.EnsureTable();
         _jobRepository.EnsureTable();
         _tcgSourceUrlRepository.EnsureTable();
@@ -103,6 +109,8 @@ public partial class BotService : BackgroundService
         _pokemonCenterSecurityStateRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
+        _autoReactionRules = _autoReactionRepository.GetAll();
+        _autoReactionsLastLoadedUtc = DateTime.UtcNow;
 
         _discordBotClient.Log += Log;
         _discordBotClient.Ready += OnReady;

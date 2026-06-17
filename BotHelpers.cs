@@ -40,11 +40,11 @@ public partial class BotService
         }
     }
 
-    private IEnumerable<IEmote> ResolveAutoReactionEmotes(SocketMessage message, GuildSettings guild)
+    private IEnumerable<IEmote> ResolveAutoReactionEmotes(SocketMessage message)
     {
-        if (guild.AutoReactionRules.Length == 0) yield break;
+        if (_autoReactionRules.Length == 0) yield break;
 
-        var emoteIds = guild.AutoReactionRules
+        var emoteIds = _autoReactionRules
             .Where(rule => rule.UserId == message.Author.Id)
             .SelectMany(rule => rule.EmoteIds ?? [])
             .Where(emoteId => !string.IsNullOrWhiteSpace(emoteId))

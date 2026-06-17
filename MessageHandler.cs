@@ -17,22 +17,22 @@ public partial class BotService
         _guildsLastLoadedUtc = DateTime.UtcNow;
     }
 
+    private void ReloadAutoReactionsIfStale()
+    {
+        if (DateTime.UtcNow - _autoReactionsLastLoadedUtc < GuildCacheTtl) return;
+        _autoReactionRules = _autoReactionRepository.GetAll();
+        _autoReactionsLastLoadedUtc = DateTime.UtcNow;
+    }
+
     public async Task MonitorMessages(SocketMessage message)
     {
         if (message.Author.IsBot) return;
 
         ReloadGuildsIfStale();
+        ReloadAutoReactionsIfStale();
 
-        var guildChannel = message.Channel as SocketGuildChannel;
-        var guildSettings = guildChannel == null
-            ? null
-            : AppSettings.Guilds.FirstOrDefault(g => string.Equals(g.Name, guildChannel.Guild.Name, StringComparison.OrdinalIgnoreCase));
-
-        if (guildSettings?.AutoReactionRules.Length > 0)
-        {
-            foreach (var emote in ResolveAutoReactionEmotes(message, guildSettings))
-                await ReactAsync(message, emote);
-        }
+        foreach (var emote in ResolveAutoReactionEmotes(message))
+            await ReactAsync(message, emote);
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
             g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
