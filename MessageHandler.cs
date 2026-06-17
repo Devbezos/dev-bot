@@ -31,8 +31,12 @@ public partial class BotService
         ReloadGuildsIfStale();
         ReloadAutoReactionsIfStale();
 
-        foreach (var emote in ResolveAutoReactionEmotes(message))
-            await ReactAsync(message, emote);
+        var autoReactionTasks = ResolveAutoReactionEmotes(message)
+            .Select(emote => ReactAsync(message, emote))
+            .ToArray();
+
+        if (autoReactionTasks.Length > 0)
+            await Task.WhenAll(autoReactionTasks);
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
             g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
