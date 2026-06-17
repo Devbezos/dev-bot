@@ -12,6 +12,12 @@ using ICustomDiscordClient = DevClient.Clients.IDiscordClient;
 
 public partial class BotService : BackgroundService
 {
+    private sealed record TrackedApplicationContext(
+        ulong ChannelId,
+        ulong ArchiveCategoryId,
+        ulong[] DenyUserIds,
+        string GuildName);
+
     private readonly IWoWAuditClient _wowAuditClient;
     private readonly IWoWUtilsClient _wowUtilsClient;
     private readonly RaidBotsClient _raidBotsClient;
@@ -34,7 +40,7 @@ public partial class BotService : BackgroundService
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _discordReady;
     private readonly SemaphoreSlim _schedulerTickLock = new(1, 1);
-    private readonly ConcurrentDictionary<ulong, (ulong channelId, ulong archiveCategoryId, ulong[] denyUserIds)> _trackedApplicationMessages = new();
+    private readonly ConcurrentDictionary<ulong, TrackedApplicationContext> _trackedApplicationMessages = new();
 
     public BotService(
         IWoWAuditClient wowAuditClient,
