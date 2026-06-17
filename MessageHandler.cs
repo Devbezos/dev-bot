@@ -31,12 +31,9 @@ public partial class BotService
         ReloadGuildsIfStale();
         ReloadAutoReactionsIfStale();
 
-        var autoReactionTasks = ResolveAutoReactionEmotes(message)
-            .Select(emote => ReactAsync(message, emote))
-            .ToArray();
-
-        if (autoReactionTasks.Length > 0)
-            await Task.WhenAll(autoReactionTasks);
+        var autoReactions = ResolveAutoReactionEmotes(message).ToArray();
+        if (autoReactions.Length > 0)
+            _ = ApplyAutoReactionsInOrder(message, autoReactions);
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
             g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
@@ -152,6 +149,12 @@ public partial class BotService
             await SendDmAsync(message.Author, "Droptimizer import is currently down. Please try again later.");
             LogError($"MonitorDroptimizers failed: {ex}");
         }
+    }
+
+    private async Task ApplyAutoReactionsInOrder(SocketMessage message, IEmote[] emotes)
+    {
+        foreach (var emote in emotes)
+            await ReactAsync(message, emote);
     }
 }
 
