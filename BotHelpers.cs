@@ -3,10 +3,13 @@ using Discord;
 using Discord.Audio;
 using Discord.WebSocket;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Runtime.CompilerServices;
 
 public partial class BotService
 {
+    private static readonly Regex CustomEmoteRegex = new(@"^<a?:[^:]+:(\d+)>$", RegexOptions.Compiled);
+
     // Dry-run aware Discord helpers
     private async Task SendMessageAsync(IMessageChannel channel, string content)
     {
@@ -34,6 +37,60 @@ public partial class BotService
             {
                 LogWarn($"Missing permissions to react in #{message.Channel.Name}");
             }
+        }
+    }
+
+    private IEnumerable<IEmote> ResolveAutoReactionEmotes(SocketMessage message, GuildSettings guild)
+    {
+        if (guild.AutoReactionRules.Length == 0) yield break;
+
+        var emoteIds = guild.AutoReactionRules
+            .Where(rule => rule.UserId == message.Author.Id)
+            .SelectMany(rule => rule.EmoteIds ?? [])
+            .Where(emoteId => !string.IsNullOrWhiteSpace(emoteId))
+            .Select(emoteId => emoteId.Trim())
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var emoteId in emoteIds)
+        {
+            if (TryResolveAutoReactionEmote(message, emoteId, out var emote))
+                yield return emote;
+        }
+    }
+
+    private bool TryResolveAutoReactionEmote(SocketMessage message, string emoteId, out IEmote emote)
+    {
+        if (Emote.TryParse(emoteId, out var parsedEmote))
+        {
+            emote = parsedEmote;
+            return true;
+        }
+
+        var customMatch = CustomEmoteRegex.Match(emoteId);
+        if (customMatch.Success)
+            emoteId = customMatch.Groups[1].Value;
+
+        if (ulong.TryParse(emoteId, out var customEmoteId))
+        {
+            var guild = (message.Channel as SocketGuildChannel)?.Guild;
+            var guildEmote = guild?.Emotes.FirstOrDefault(x => x.Id == customEmoteId);
+            if (guildEmote != null)
+            {
+                emote = guildEmote;
+                return true;
+            }
+        }
+
+        try
+        {
+            emote = new Emoji(emoteId);
+            return true;
+        }
+        catch (Exception)
+        {
+            LogWarn($"Auto reaction emote '{emoteId}' could not be resolved for message {message.Id}");
+            emote = null!;
+            return false;
         }
     }
 

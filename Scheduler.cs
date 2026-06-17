@@ -9,6 +9,7 @@ using TimeZoneConverter;
 
 public partial class BotService
 {
+    private const ulong FitnessFailureNotificationUserId = 178295063808311297;
     private const int DiscordMessageSoftLimit = 1800;
     private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly object TcgNotificationStateLock = new();
@@ -578,6 +579,23 @@ public partial class BotService
         && !string.IsNullOrWhiteSpace(settings.WeightSheetDateColumn)
         && !string.IsNullOrWhiteSpace(settings.WeightSheetWeightColumn)
         && !string.IsNullOrWhiteSpace(AppSettings.FitnessWeightSheet.CredentialsPath);
+
+    private static string BuildFitnessFailureMessage(string cadence, string username, string errorMessage) =>
+        $"Fitness {cadence} failed for `{username}`: {errorMessage}";
+
+    private async Task NotifyFitnessFailure(string cadence, string username, Exception exception)
+    {
+        var message = BuildFitnessFailureMessage(cadence, username, exception.Message);
+
+        try
+        {
+            await _discordClient.SendDirectMessage(FitnessFailureNotificationUserId, message);
+        }
+        catch (Exception dmEx)
+        {
+            LogError($"Fitness {cadence} failure DM failed for user {FitnessFailureNotificationUserId}: {dmEx.Message}");
+        }
+    }
  
     public async Task RunScheduledTick(CancellationToken cancellationToken)
     {
@@ -645,7 +663,11 @@ public partial class BotService
                     if (!credsByUsername.TryGetValue(dbUser.Username, out var dailyCreds)) continue;
                     dailyCreds.ChannelId = dbUser.ChannelId;
                     try { await new GoogleHealthClient(dailyCreds).PostDailyFitnessStats(); dailyPostedCount++; }
-                    catch (Exception ex) { LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}"); }
+                    catch (Exception ex)
+                    {
+                        LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}");
+                        await NotifyFitnessFailure("daily", dbUser.Username, ex);
+                    }
                 }
                 if (dailyPostedCount > 0)
                     _jobRepository.MarkRan(fitnessDaily.Name);
@@ -677,7 +699,11 @@ public partial class BotService
                                 LogWarn($"Fitness weekly weight sheet skipped for {dbUser.Username}: no recent weight found");
                         }
                     }
-                    catch (Exception ex) { LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}"); }
+                    catch (Exception ex)
+                    {
+                        LogError($"Fitness weekly failed for {dbUser.Username}: {ex.Message}");
+                        await NotifyFitnessFailure("weekly", dbUser.Username, ex);
+                    }
                 }
                 if (weeklyPostedCount > 0)
                     _jobRepository.MarkRan(fitnessWeekly.Name);

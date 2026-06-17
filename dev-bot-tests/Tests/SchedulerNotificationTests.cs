@@ -72,6 +72,22 @@ public class SchedulerNotificationTests : IDisposable
         Assert.False(InvokeShouldNotifyPokemonCenterSecurity(previous, true, "old"));
     }
 
+    [Fact]
+    public void BuildFitnessFailureMessage_ForDailyFailure_IncludesUsernameAndError()
+    {
+        var message = InvokeBuildFitnessFailureMessage("daily", "dev", "token expired");
+
+        Assert.Equal("Fitness daily failed for `dev`: token expired", message);
+    }
+
+    [Fact]
+    public void BuildFitnessFailureMessage_ForWeeklyFailure_IncludesCadence()
+    {
+        var message = InvokeBuildFitnessFailureMessage("weekly", "test-user", "403 forbidden");
+
+        Assert.Equal("Fitness weekly failed for `test-user`: 403 forbidden", message);
+    }
+
     public void Dispose() => DeleteStateFile();
 
     private static IReadOnlyCollection<object> InvokeGetFirstSaleProducts(
@@ -97,6 +113,18 @@ public class SchedulerNotificationTests : IDisposable
             BindingFlags.NonPublic | BindingFlags.Static);
 
         return (bool)method!.Invoke(null, [previous, currentSecurityDetected, currentFingerprint])!;
+    }
+
+    private static string InvokeBuildFitnessFailureMessage(
+        string cadence,
+        string username,
+        string errorMessage)
+    {
+        var method = typeof(BotService).GetMethod(
+            "BuildFitnessFailureMessage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        return (string)method!.Invoke(null, [cadence, username, errorMessage])!;
     }
 
     private void DeleteStateFile()

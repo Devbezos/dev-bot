@@ -63,4 +63,32 @@ public class ApplicationHandlerTests
         Assert.Equal(["111", "222"], roundTrip.RaiderManagement.RestrictedRoleIds);
         Assert.Equal(123ul, roundTrip.Channels["trialCategory"]);
     }
+
+    [Fact]
+    public void GuildSettingsDto_RoundTripsAutoReactionRules()
+    {
+        var guild = new DevClient.Data.GuildSettings
+        {
+            Name = "CHAOS",
+            AutoReactionRules =
+            [
+                new DevClient.Data.AutoReactionRule
+                {
+                    UserId = 178295063808311297ul,
+                    EmoteIds = ["123456789012345678", "<:blob:999999999999999999>", "😂"]
+                }
+            ]
+        };
+
+        var dto = GuildSettingsDto.From(guild);
+        var roundTrip = dto.ToGuildSettings();
+
+        Assert.Single(dto.AutoReactionRules);
+        Assert.Equal("178295063808311297", dto.AutoReactionRules[0].UserId);
+        Assert.Equal(["123456789012345678", "<:blob:999999999999999999>", "😂"], dto.AutoReactionRules[0].EmoteIds);
+
+        Assert.Single(roundTrip.AutoReactionRules);
+        Assert.Equal(178295063808311297ul, roundTrip.AutoReactionRules[0].UserId);
+        Assert.Equal(["123456789012345678", "<:blob:999999999999999999>", "😂"], roundTrip.AutoReactionRules[0].EmoteIds);
+    }
 }

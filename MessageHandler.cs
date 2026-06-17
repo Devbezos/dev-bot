@@ -23,6 +23,17 @@ public partial class BotService
 
         ReloadGuildsIfStale();
 
+        var guildChannel = message.Channel as SocketGuildChannel;
+        var guildSettings = guildChannel == null
+            ? null
+            : AppSettings.Guilds.FirstOrDefault(g => string.Equals(g.Name, guildChannel.Guild.Name, StringComparison.OrdinalIgnoreCase));
+
+        if (guildSettings?.AutoReactionRules.Length > 0)
+        {
+            foreach (var emote in ResolveAutoReactionEmotes(message, guildSettings))
+                await ReactAsync(message, emote);
+        }
+
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
             g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
 
