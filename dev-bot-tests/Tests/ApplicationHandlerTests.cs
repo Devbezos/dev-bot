@@ -37,6 +37,13 @@ public class ApplicationHandlerTests
         {
             Name = "REFINED",
             Channels = new Dictionary<string, ulong> { ["trialCategory"] = 123ul },
+            GoogleSheet = new DevClient.Data.GoogleSheetsSettings
+            {
+                Name = "Guild Sheet",
+                Id = "sheet-id",
+                SheetName = "Sheet1",
+                CredentialsPath = "creds.json"
+            },
             Features = new DevClient.Data.GuildFeatures
             {
                 Applications = true,
@@ -46,6 +53,11 @@ public class ApplicationHandlerTests
             {
                 AllowXing = false,
                 AllowChecking = true
+            },
+            ApplicationSheet = new DevClient.Data.ApplicationSheetSettings
+            {
+                Id = "app-sheet-id",
+                SheetName = "Applications"
             },
             RaiderManagement = new DevClient.Data.RaiderManagementSettings
             {
@@ -62,5 +74,6 @@ public class ApplicationHandlerTests
         Assert.True(roundTrip.Applications.AllowChecking);
         Assert.Equal(["111", "222"], roundTrip.RaiderManagement.RestrictedRoleIds);
         Assert.Equal(123ul, roundTrip.Channels["trialCategory"]);
+        Assert.Equal("creds.json", roundTrip.ApplicationSheet!.CredentialsPath);
     }
 }
