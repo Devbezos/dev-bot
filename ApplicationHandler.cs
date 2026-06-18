@@ -49,6 +49,7 @@ public partial class BotService
         try
         {
             var tracked = await _discordClient.CheckNewApplications(_googleSheetsClient);
+            LogInfo($"Application check discovered {tracked.Count} trackable message(s)");
             foreach (var t in tracked)
             {
                 _trackedApplicationMessages[t.MessageId] = new TrackedApplicationContext(
@@ -107,6 +108,8 @@ public partial class BotService
 
         if (reactionCount < 1) return;
 
+        LogInfo($"Processing application reaction {reactionName} on message {cachedMessage.Id} in channel {tracked.ChannelId} by user {reaction.UserId}");
+
         var textChannel = _discordBotClient.GetChannel(tracked.ChannelId) as SocketTextChannel;
         if (textChannel == null) return;
 
@@ -114,10 +117,12 @@ public partial class BotService
         {
             await ArchiveApplicationChannel(textChannel, tracked.ArchiveCategoryId, "approved");
             await CreateTrialChannelForApprovedApplication(guildSettings, textChannel, message);
+            LogInfo($"Application approved for channel {tracked.ChannelId}");
         }
         else
         {
             await ArchiveApplicationChannel(textChannel, tracked.ArchiveCategoryId, "denied");
+            LogInfo($"Application denied for channel {tracked.ChannelId}");
         }
 
         _trackedApplicationMessages.TryRemove(cachedMessage.Id, out _);
@@ -165,6 +170,7 @@ public partial class BotService
 
         var trialChannel = await guild.CreateTextChannelAsync(applicationChannel.Name, properties => properties.CategoryId = trialCategoryId);
         await trialChannel.SyncPermissionsAsync();
+        LogInfo($"Created trial channel shell {trialChannel.Id} under category {trialCategoryId} for application channel {applicationChannel.Id}");
 
         foreach (var restrictedRoleId in guildSettings.RaiderManagement.RestrictedRoleIds)
         {
@@ -185,7 +191,14 @@ public partial class BotService
 
         var warcraftLogsUrl = ExtractWarcraftLogsUrl(applicationMessage);
         if (!string.IsNullOrWhiteSpace(warcraftLogsUrl))
+        {
             await trialChannel.SendMessageAsync(warcraftLogsUrl);
+            LogInfo($"Posted Warcraft Logs link into trial channel {trialChannel.Id}");
+        }
+        else
+        {
+            LogWarn($"No Warcraft Logs URL found for approved application message {applicationMessage.Id}; trial channel {trialChannel.Id} created without a logs link");
+        }
 
         LogInfo($"Created trial channel {trialChannel.Id} for approved application channel {applicationChannel.Id}");
     }

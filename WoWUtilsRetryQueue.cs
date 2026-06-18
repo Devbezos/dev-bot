@@ -72,10 +72,14 @@ public partial class BotService
                 .ToList();
         }
 
+        if (dueItems.Count > 0)
+            LogInfo($"Processing {dueItems.Count} queued WoW Utils import(s)");
+
         foreach (var item in dueItems)
         {
             try
             {
+                LogInfo($"Retrying queued WoW Utils import for {item.ReportUrl} (attempt {item.AttemptCount})");
                 var importResult = await _wowUtilsClient.ImportDroptimizer(item.GroupId, item.ReportUrl, item.ApiKey);
                 if (importResult == null || string.IsNullOrWhiteSpace(importResult.CharacterId))
                 {
@@ -93,8 +97,9 @@ public partial class BotService
             }
             catch (HttpRequestException ex) when (IsWoWUtilsRetryable(ex))
             {
-                RescheduleWoWUtilsQueuedImport(item.Id, DateTime.UtcNow.Add(WoWUtilsRetryDelay));
-                LogWarn($"Queued WoW Utils import hit {(int?)ex.StatusCode ?? 0} again; rescheduled for {item.ReportUrl}");
+                var nextRetryAtUtc = DateTime.UtcNow.Add(WoWUtilsRetryDelay);
+                RescheduleWoWUtilsQueuedImport(item.Id, nextRetryAtUtc);
+                LogWarn($"Queued WoW Utils import hit {(int?)ex.StatusCode ?? 0} again; rescheduled for {item.ReportUrl} at {nextRetryAtUtc:O}");
             }
             catch (Exception ex)
             {
@@ -131,12 +136,18 @@ public partial class BotService
                 existing.RetryAtUtc = item.RetryAtUtc;
                 existing.AttemptCount++;
                 SaveWoWUtilsRetryQueue(queue);
+                Serilog.Log.ForContext("SourceContext", "BotService.QueueWoWUtilsImport")
+                    .Information("Updated queued WoW Utils import for {ReportUrl}; next retry at {RetryAtUtc:o}, attempt {AttemptCount}",
+                        existing.ReportUrl, existing.RetryAtUtc, existing.AttemptCount);
                 return existing.RetryAtUtc;
             }
 
             item.AttemptCount = 1;
             queue.Add(item);
             SaveWoWUtilsRetryQueue(queue);
+            Serilog.Log.ForContext("SourceContext", "BotService.QueueWoWUtilsImport")
+                .Information("Queued WoW Utils import for {ReportUrl}; first retry at {RetryAtUtc:o}",
+                    item.ReportUrl, item.RetryAtUtc);
             return item.RetryAtUtc;
         }
     }
@@ -152,6 +163,9 @@ public partial class BotService
             existing.RetryAtUtc = retryAtUtc;
             existing.AttemptCount++;
             SaveWoWUtilsRetryQueue(queue);
+            Serilog.Log.ForContext("SourceContext", "BotService.RescheduleWoWUtilsQueuedImport")
+                .Information("Rescheduled queued WoW Utils import for {ReportUrl}; next retry at {RetryAtUtc:o}, attempt {AttemptCount}",
+                    existing.ReportUrl, existing.RetryAtUtc, existing.AttemptCount);
         }
     }
 
@@ -160,8 +174,15 @@ public partial class BotService
         lock (WoWUtilsRetryQueueLock)
         {
             var queue = LoadWoWUtilsRetryQueue();
+            var removed = queue.FirstOrDefault(x => x.Id == id);
             queue.RemoveAll(x => x.Id == id);
             SaveWoWUtilsRetryQueue(queue);
+            if (removed != null)
+            {
+                Serilog.Log.ForContext("SourceContext", "BotService.RemoveWoWUtilsQueuedImport")
+                    .Information("Removed queued WoW Utils import for {ReportUrl} after {AttemptCount} attempt(s)",
+                        removed.ReportUrl, removed.AttemptCount);
+            }
         }
     }
 

@@ -33,7 +33,10 @@ public partial class BotService
 
         var autoReactions = ResolveAutoReactionEmotes(message).ToArray();
         if (autoReactions.Length > 0)
+        {
+            LogInfo($"Applying {autoReactions.Length} auto reaction(s) to message {message.Id} from {message.Author.Username}");
             _ = ApplyAutoReactionsInOrder(message, autoReactions);
+        }
 
         var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
             g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
@@ -82,6 +85,7 @@ public partial class BotService
                         string.IsNullOrWhiteSpace(droptimizer.ApiKey) ||
                         string.IsNullOrWhiteSpace(droptimizer.GroupId))
                     {
+                        LogWarn($"WoW Utils configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
                         await SendDmAsync(message.Author, "WoW Utils is missing the API key or groupId for this guild. Please ask an admin to check the bot settings.");
                         await DeleteAsync(message);
                         return;
@@ -105,6 +109,7 @@ public partial class BotService
 
                     if (!bool.Parse(response.Created))
                     {
+                        LogWarn($"WoW Audit rejected droptimizer {raidBotsUrl} for guild {guild.Name}: {response.Base[0]}");
                         await SendDmAsync(message.Author, $"You did not send a valid droptimizer {response.Base[0]}");
                         await DeleteAsync(message);
                         return;
@@ -119,11 +124,15 @@ public partial class BotService
             }
 
             if (itemUpgrades.Count > 0)
+            {
+                LogInfo($"Updating Google Sheet with {itemUpgrades.Count} item upgrade(s)");
                 await _googleSheetsClient.UpdateSheet(itemUpgrades);
+            }
 
             if (queuedRetryTimesUtc.Count > 0)
             {
                 var nextRetryAtUtc = queuedRetryTimesUtc.Min();
+                LogInfo($"Queued {queuedRetryTimesUtc.Count} WoW Utils import(s); next retry at {nextRetryAtUtc:O}");
                 await ReactAsync(message, new Emoji("⏳"));
                 await SendDmAsync(
                     message.Author,
@@ -131,6 +140,7 @@ public partial class BotService
             }
             else
             {
+                LogInfo($"Droptimizer import completed immediately for {raidBotsUrls.Count} report(s)");
                 await ReactAsync(message, new Emoji("✅"));
             }
 

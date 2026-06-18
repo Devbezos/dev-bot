@@ -193,6 +193,7 @@ public partial class BotService
         var userIds = _tcgChannelSettingsRepository.GetNotificationUserIds(settingsKey);
         if (userIds.Length == 0) return;
 
+        LogInfo($"{label}: notifying {userIds.Length} user(s) about {newProducts.Count} new product(s)");
         var messages = BuildNewProductMessages(label, newProducts);
         foreach (var userId in userIds)
         {
@@ -357,6 +358,8 @@ public partial class BotService
         var preorderChannelId = GetPreorderChannelId(settingsKey);
         var preorderPostResults = BuildSharedPreorderChannelResults(resultsKey, preorderChannelId, preorderDiscordFiltered);
 
+        LogInfo($"{label}: {preorderResults.Sum(r => r.Products.Count)} scraped product(s), {preorderDiscordFiltered.Sum(r => r.Products.Count)} after filters, {newPreorderProducts.Count} newly seen");
+
         try
         {
             if (preorderChannelId != 0 && preorderPostResults.Any())
@@ -376,6 +379,7 @@ public partial class BotService
             if (newPreorderProducts.Any())
                 await NotifyNewProducts(label, settingsKey, newPreorderProducts);
             _tcgRepository.SaveResults(DateTime.UtcNow, preorderDiscordFiltered, resultsKey);
+            LogInfo($"{label}: saved {preorderDiscordFiltered.Sum(r => r.Products.Count)} product(s) to {resultsKey}");
         }
     }
 
@@ -389,6 +393,8 @@ public partial class BotService
             preorderResults.Concat(TcgPreorderClassifier.FromTcgResults(previousPreorderResults)));
         var preorderChannelId = GetPreorderChannelId(settingsKey);
         var preorderPostResults = BuildSharedPreorderChannelResults(resultsKey, preorderChannelId, mergedPreorders);
+
+        LogInfo($"{label}: {preorderResults.Sum(r => r.Products.Count)} diverted product(s), {newPreorderProducts.Count} newly seen, {mergedPreorders.Sum(r => r.Products.Count)} total after merge");
 
         try
         {
@@ -420,6 +426,7 @@ public partial class BotService
         try
         {
             snapshot = await new PokemonCenterSecurityClient().GetSnapshot(cancellationToken);
+            LogInfo($"Pokemon Center security snapshot captured: {snapshot.Summary.Replace("\n", " | ")}");
         }
         catch (Exception ex)
         {
@@ -501,6 +508,9 @@ public partial class BotService
     {
         var sent = false;
         var channelId = _tcgChannelSettingsRepository.GetChannelId(settingsKey);
+        var userIds = _tcgChannelSettingsRepository.GetNotificationUserIds(settingsKey);
+
+        LogInfo($"Pokemon Center security notification attempt: channel {(channelId == 0 ? "disabled" : channelId)}, {userIds.Length} DM recipient(s)");
         if (channelId != 0)
         {
             try
@@ -518,7 +528,7 @@ public partial class BotService
             LogWarn("Pokemon Center security channel is not configured; skipping Discord post");
         }
 
-        foreach (var userId in _tcgChannelSettingsRepository.GetNotificationUserIds(settingsKey))
+        foreach (var userId in userIds)
         {
             try
             {
@@ -754,6 +764,7 @@ public partial class BotService
                 var newPokemonProducts = GetFirstSaleProducts("pokemon", discordFiltered, previousPokemonResults);
                 var pokemonProductsChanged = ProductSetChanged(discordFiltered, previousPokemonResults);
                 var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
+                LogInfo($"Pokemon TCG: {filtered.Sum(r => r.Products.Count)} product(s) after price filter, {discordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newPokemonProducts.Count} newly seen");
                 try
                 {
                     if (pokemonChannelId != 0 && discordFiltered.Any() && pokemonProductsChanged)
@@ -774,6 +785,7 @@ public partial class BotService
                     if (newPokemonProducts.Any())
                         await NotifyNewProducts("Pokemon TCG", "pokemon", newPokemonProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, splitPokemonResults.Regular, "pokemon");
+                    LogInfo($"Pokemon TCG: saved {splitPokemonResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
                     await SaveDivertedPreorderResults("Pokemon Pre-Order TCG", "pokemon_preorder", "pokemon_preorder", divertedPreorders);
                 }
 
@@ -817,6 +829,7 @@ public partial class BotService
                 var newGundamProducts = GetFirstSaleProducts("gundam", gundamDiscordFiltered, previousGundamResults);
                 var gundamProductsChanged = ProductSetChanged(gundamDiscordFiltered, previousGundamResults);
                 var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
+                LogInfo($"Gundam TCG: {filteredGundamResults.Sum(r => r.Products.Count)} scraped product(s), {gundamDiscordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedGundamPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newGundamProducts.Count} newly seen");
                 try
                 {
                     if (gundamChannelId != 0 && gundamDiscordFiltered.Any() && gundamProductsChanged)
@@ -837,6 +850,7 @@ public partial class BotService
                     if (newGundamProducts.Any())
                         await NotifyNewProducts("Gundam TCG", "gundam", newGundamProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, splitGundamResults.Regular, "gundam");
+                    LogInfo($"Gundam TCG: saved {splitGundamResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
                     await SaveDivertedPreorderResults("Gundam Pre-Order TCG", "gundam_preorder", "gundam_preorder", divertedGundamPreorders);
                 }
 
