@@ -4,6 +4,7 @@ using DevClient.Data.Discord;
 using DevClient.Data.Fitness;
 using DevClient;
 using Discord;
+using Discord.Audio;
 using Discord.WebSocket;
 using Microsoft.Extensions.Hosting;
 using Serilog.Events;
@@ -42,6 +43,7 @@ public partial class BotService : BackgroundService
     private volatile bool _discordReady;
     private readonly SemaphoreSlim _schedulerTickLock = new(1, 1);
     private readonly ConcurrentDictionary<ulong, TrackedApplicationContext> _trackedApplicationMessages = new();
+    private readonly ConcurrentDictionary<ulong, IAudioClient> _voiceConnections = new();
     private AutoReactionRule[] _autoReactionRules = [];
     private DateTime _autoReactionsLastLoadedUtc = DateTime.MinValue;
 
@@ -116,6 +118,7 @@ public partial class BotService : BackgroundService
         _discordBotClient.Ready += OnReady;
         _discordBotClient.MessageReceived += MonitorMessages;
         _discordBotClient.ReactionAdded += OnReactionAdded;
+        _discordBotClient.InteractionCreated += OnInteractionCreated;
 
         await _discordBotClient.LoginAsync(TokenType.Bot, AppSettings.Discord.Token);
         await _discordBotClient.StartAsync();
@@ -328,6 +331,7 @@ public partial class BotService : BackgroundService
         };
 
         await RestoreTrackedApplicationMessages();
+        await RegisterSlashCommands();
         _discordReady = true;
         LogInfo("Bot ready for scheduled jobs");
     }
@@ -347,9 +351,3 @@ public partial class BotService : BackgroundService
         return Task.CompletedTask;
     }
 }
-
-
-
-
-
-
