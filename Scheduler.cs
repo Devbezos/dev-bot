@@ -802,7 +802,8 @@ public partial class BotService
                     ("Dollys Gundam", () => new DollysClient(_tcgSourceUrlRepository).GetGundam()),
                     ("Shopify Gundam", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetGundam(
                         "TopShelfCo",
-                        "Untouchables")),
+                        "Untouchables",
+                        "TKOToyCo")),
                 };
 
                 foreach (var scraper in gundamScrapers)
@@ -915,3 +916,4 @@ public partial class BotService
         }
     }
 }
+
