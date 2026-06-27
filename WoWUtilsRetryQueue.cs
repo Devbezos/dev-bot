@@ -1,5 +1,6 @@
 using DevClient.Clients;
 using DevClient.Data;
+using DevClient.Data.WoW.WoWUtils;
 using Discord;
 using Discord.WebSocket;
 using System.Net;
@@ -16,17 +17,21 @@ public partial class BotService
         SocketMessage message,
         GuildSettings guild,
         DroptimizerSettings droptimizer,
-        string raidBotsUrl)
+        string raidBotsUrl,
+        Dictionary<string, WoWUtilsImportResponse> importCache,
+        Dictionary<string, WoWUtilsFetchResponse> wowUtilsReports)
     {
         try
         {
-            var importResult = await _wowUtilsClient.ImportDroptimizer(
-                droptimizer.GroupId,
+            var importResult = await ImportDroptimizerToWoWUtils(
                 raidBotsUrl,
-                droptimizer.ApiKey!);
+                droptimizer,
+                wowUtilsReports);
 
             if (importResult == null || string.IsNullOrWhiteSpace(importResult.CharacterId))
                 return (WoWUtilsImportOutcome.Failed, null);
+
+            CacheWoWUtilsImportResult(importCache, raidBotsUrl, importResult);
 
             var warnings = importResult.Warnings is { Length: > 0 }
                 ? $" Warnings: {string.Join("; ", importResult.Warnings)}"
@@ -61,6 +66,18 @@ public partial class BotService
         }
     }
 
+    private static void CacheWoWUtilsImportResult(
+        Dictionary<string, WoWUtilsImportResponse> importCache,
+        string raidBotsUrl,
+        WoWUtilsImportResponse importResult)
+    {
+        importCache[raidBotsUrl] = importResult;
+
+        var reportId = raidBotsUrl.TrimEnd('/').Split('/').LastOrDefault();
+        if (!string.IsNullOrWhiteSpace(reportId))
+            importCache[reportId] = importResult;
+    }
+
     private async Task ProcessQueuedWoWUtilsImports()
     {
         List<WoWUtilsQueuedImport> dueItems;
@@ -80,7 +97,15 @@ public partial class BotService
             try
             {
                 LogInfo($"Retrying queued WoW Utils import for {item.ReportUrl} (attempt {item.AttemptCount})");
-                var importResult = await _wowUtilsClient.ImportDroptimizer(item.GroupId, item.ReportUrl, item.ApiKey);
+                var droptimizer = new DroptimizerSettings
+                {
+                    GroupId = item.GroupId,
+                    ApiKey = item.ApiKey
+                };
+                var importResult = await ImportDroptimizerToWoWUtils(
+                    item.ReportUrl,
+                    droptimizer,
+                    new Dictionary<string, WoWUtilsFetchResponse>(StringComparer.OrdinalIgnoreCase));
                 if (importResult == null || string.IsNullOrWhiteSpace(importResult.CharacterId))
                 {
                     LogWarn($"Queued WoW Utils import returned an empty response for {item.ReportUrl}; dropping queue item");
