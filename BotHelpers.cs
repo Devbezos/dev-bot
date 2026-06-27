@@ -58,6 +58,14 @@ public partial class BotService
         }
     }
 
+    private string[] ResolveProfilePictureGifUrls(ulong userId) => _autoReactionRules
+        .Where(rule => rule.UserId == userId)
+        .SelectMany(rule => rule.ProfilePictureGifUrls ?? [])
+        .Where(gifUrl => !string.IsNullOrWhiteSpace(gifUrl))
+        .Select(gifUrl => gifUrl.Trim())
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
     private bool TryResolveAutoReactionEmote(SocketMessage message, string emoteId, out IEmote emote)
     {
         if (Emote.TryParse(emoteId, out var parsedEmote))
