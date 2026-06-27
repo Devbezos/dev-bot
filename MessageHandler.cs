@@ -2,6 +2,7 @@ using DevClient;
 using DevClient.Data;
 using DevClient.Data.Discord;
 using DevClient.Data.WoW.Raidbots;
+using DevClient.Data.WoW.WoWUtils;
 using Discord;
 using Discord.WebSocket;
 
@@ -70,50 +71,77 @@ public partial class BotService
         {
             var itemUpgrades = new List<ItemUpgrade>();
             var queuedRetryTimesUtc = new List<DateTime>();
+            var wowUtilsReports = new Dictionary<string, WoWUtilsFetchResponse>(StringComparer.OrdinalIgnoreCase);
+            var wowUtilsImports = new Dictionary<string, WoWUtilsImportResponse>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var raidBotsUrl in raidBotsUrls)
             {
                 var reportId = raidBotsUrl.Split('/').Last();
                 LogInfo($"Processing {raidBotsUrl}");
+                var reportImportedOrQueued = false;
+                var reportFailed = false;
 
                 var droptimizer = guild.Droptimizer;
-                var isWoWUtils = droptimizer?.Source?.Equals("wowutils", StringComparison.OrdinalIgnoreCase) == true;
+                var shouldUploadToWoWUtils = HasWoWUtilsConfig(droptimizer);
+                var shouldUploadToWoWAudit = HasWoWAuditConfig(droptimizer);
 
-                if (isWoWUtils)
+                if (!shouldUploadToWoWUtils && !shouldUploadToWoWAudit)
                 {
-                    if (droptimizer == null ||
-                        string.IsNullOrWhiteSpace(droptimizer.ApiKey) ||
-                        string.IsNullOrWhiteSpace(droptimizer.GroupId))
-                    {
-                        LogWarn($"WoW Utils configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
-                        await SendDmAsync(message.Author, "WoW Utils is missing the API key or groupId for this guild. Please ask an admin to check the bot settings.");
-                        await DeleteAsync(message);
-                        return;
-                    }
+                    LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
+                    await SendDmAsync(message.Author, "This guild is missing both WoW Utils and WoW Audit droptimizer credentials. Please ask an admin to check the bot settings.");
+                    await DeleteAsync(message);
+                    return;
+                }
 
+                if (shouldUploadToWoWUtils)
+                {
+                    var wowUtilsSettings = droptimizer!;
                     var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
-                        message, guild, droptimizer, raidBotsUrl);
+                        message,
+                        guild,
+                        wowUtilsSettings,
+                        raidBotsUrl,
+                        wowUtilsImports,
+                        wowUtilsReports);
 
                     if (outcome == WoWUtilsImportOutcome.Failed)
                     {
-                        await DeleteAsync(message);
-                        return;
+                        reportFailed = true;
+                    }
+                    else
+                    {
+                        reportImportedOrQueued = true;
                     }
 
                     if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
                         queuedRetryTimesUtc.Add(retryAtUtc.Value);
                 }
-                else
-                {
-                    var response = await _wowAuditClient.UpdateWishlist(reportId, guild.Name);
 
-                    if (!bool.Parse(response.Created))
+                if (shouldUploadToWoWAudit)
+                {
+                    var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
+                        message,
+                        guild,
+                        reportId,
+                        raidBotsUrl);
+
+                    if (outcome == WoWAuditImportOutcome.Failed)
                     {
-                        LogWarn($"WoW Audit rejected droptimizer {raidBotsUrl} for guild {guild.Name}: {response.Base[0]}");
-                        await SendDmAsync(message.Author, $"You did not send a valid droptimizer {response.Base[0]}");
-                        await DeleteAsync(message);
-                        return;
+                        reportFailed = true;
                     }
+                    else
+                    {
+                        reportImportedOrQueued = true;
+                    }
+
+                    if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
+                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                }
+
+                if (reportFailed && !reportImportedOrQueued)
+                {
+                    await DeleteAsync(message);
+                    return;
                 }
 
                 var validGoogleSheetsReport = await _raidBotsClient.IsValidReport(raidBotsUrl);
@@ -136,7 +164,7 @@ public partial class BotService
                 await ReactAsync(message, new Emoji("⏳"));
                 await SendDmAsync(
                     message.Author,
-                    $"WoW Utils rate-limited your droptimizer import, so I queued it for retry at {nextRetryAtUtc:MMMM d, yyyy h:mm tt} UTC.");
+                    $"One or more droptimizer uploads hit an API limit, so I queued a retry for {nextRetryAtUtc:MMMM d, yyyy h:mm tt} UTC.");
             }
             else
             {
@@ -167,9 +195,6 @@ public partial class BotService
             await ReactAsync(message, emote);
     }
 }
-
-
-
 
 
 

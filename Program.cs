@@ -42,7 +42,7 @@ var host = Host.CreateDefaultBuilder(args)
                 | GatewayIntents.MessageContent
                 | GatewayIntents.Guilds
                 | GatewayIntents.GuildMembers,
-            AlwaysDownloadUsers = true
+            AlwaysDownloadUsers = false
         }));
 
         services.AddSingleton<BotService>();
@@ -53,6 +53,7 @@ var host = Host.CreateDefaultBuilder(args)
     .Build();
 
 await host.RunAsync();
+
 
 
 

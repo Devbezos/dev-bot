@@ -609,9 +609,13 @@ public partial class BotService
  
     public async Task RunScheduledTick(CancellationToken cancellationToken)
     {
-        if (!_discordReady)
+        if (!_schedulerReady)
         {
-            LogInfo("Scheduler tick skipped; bot is not ready yet");
+            if (DateTime.UtcNow - _lastSchedulerNotReadyLogUtc >= TimeSpan.FromMinutes(15))
+            {
+                LogWarn("Scheduler tick skipped; Discord gateway is not connected yet");
+                _lastSchedulerNotReadyLogUtc = DateTime.UtcNow;
+            }
             return;
         }
 
@@ -632,6 +636,7 @@ public partial class BotService
             var now = TimeZoneInfo.ConvertTime(DateTime.UtcNow, eastern);
 
             await ProcessQueuedWoWUtilsImports();
+            await ProcessQueuedWoWAuditImports();
 
             var jobs = _jobRepository.GetAll();
             var globalEnabled = jobs.ToDictionary(j => j.Name, j => j.Enabled);
@@ -916,4 +921,8 @@ public partial class BotService
         }
     }
 }
+
+
+
+
 

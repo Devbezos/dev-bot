@@ -40,7 +40,8 @@ public partial class BotService : BackgroundService
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
     private readonly DiscordSocketClient _discordBotClient;
-    private volatile bool _discordReady;
+    private volatile bool _schedulerReady;
+    private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
     private readonly SemaphoreSlim _schedulerTickLock = new(1, 1);
     private readonly ConcurrentDictionary<ulong, TrackedApplicationContext> _trackedApplicationMessages = new();
     private readonly ConcurrentDictionary<ulong, IAudioClient> _voiceConnections = new();
@@ -115,8 +116,10 @@ public partial class BotService : BackgroundService
         _autoReactionsLastLoadedUtc = DateTime.UtcNow;
 
         _discordBotClient.Log += Log;
+        _discordBotClient.Connected += OnConnected;
         _discordBotClient.Ready += OnReady;
         _discordBotClient.MessageReceived += MonitorMessages;
+        _discordBotClient.UserUpdated += OnUserUpdated;
         _discordBotClient.ReactionAdded += OnReactionAdded;
         _discordBotClient.InteractionCreated += OnInteractionCreated;
 
@@ -125,6 +128,17 @@ public partial class BotService : BackgroundService
 
         LogInfo("Bot started");
         await Task.Delay(Timeout.Infinite, stoppingToken);
+    }
+
+    private Task OnConnected()
+    {
+        if (!_schedulerReady)
+        {
+            _schedulerReady = true;
+            LogInfo("Discord gateway connected; scheduled jobs enabled");
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task OnReady()
@@ -330,9 +344,27 @@ public partial class BotService : BackgroundService
             if (message != null) await message.PinAsync();
         };
 
-        await RestoreTrackedApplicationMessages();
-        await RegisterSlashCommands();
-        _discordReady = true;
+        try
+        {
+            await RestoreTrackedApplicationMessages();
+        }
+        catch (Exception ex)
+        {
+            LogError($"RestoreTrackedApplicationMessages failed during startup: {ex}");
+        }
+
+        try
+        {
+            await RegisterSlashCommands();
+        }
+        catch (Exception ex)
+        {
+            LogError($"RegisterSlashCommands failed during startup: {ex}");
+        }
+
+        if (!_schedulerReady)
+            _schedulerReady = true;
+
         LogInfo("Bot ready for scheduled jobs");
     }
 
@@ -351,3 +383,5 @@ public partial class BotService : BackgroundService
         return Task.CompletedTask;
     }
 }
+
+
