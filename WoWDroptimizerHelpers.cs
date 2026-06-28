@@ -7,12 +7,30 @@ using System.Text;
 
 public partial class BotService
 {
+    private enum DroptimizerUploadTarget
+    {
+        None,
+        WoWUtils,
+        WoWAudit
+    }
+
     private static bool HasWoWUtilsConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.ApiKey)
         && !string.IsNullOrWhiteSpace(droptimizer?.GroupId);
 
     private static bool HasWoWAuditConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.Token);
+
+    private static DroptimizerUploadTarget ResolveDroptimizerUploadTarget(DroptimizerSettings? droptimizer)
+    {
+        if (HasWoWUtilsConfig(droptimizer))
+            return DroptimizerUploadTarget.WoWUtils;
+
+        if (HasWoWAuditConfig(droptimizer))
+            return DroptimizerUploadTarget.WoWAudit;
+
+        return DroptimizerUploadTarget.None;
+    }
 
     private async Task<WoWUtilsImportResponse> ImportDroptimizerToWoWUtils(
         string raidBotsUrl,
@@ -63,3 +81,4 @@ public partial class BotService
             $"WoW Audit wishlist update failed ({(int)response.StatusCode}): {responseBody}");
     }
 }
+

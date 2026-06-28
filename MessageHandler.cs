@@ -82,18 +82,22 @@ public partial class BotService
                 var reportFailed = false;
 
                 var droptimizer = guild.Droptimizer;
-                var shouldUploadToWoWUtils = HasWoWUtilsConfig(droptimizer);
-                var shouldUploadToWoWAudit = HasWoWAuditConfig(droptimizer);
+                var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer);
+                var hasWoWUtilsConfig = HasWoWUtilsConfig(droptimizer);
+                var hasWoWAuditConfig = HasWoWAuditConfig(droptimizer);
 
-                if (!shouldUploadToWoWUtils && !shouldUploadToWoWAudit)
+                if (uploadTarget == DroptimizerUploadTarget.None)
                 {
                     LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
-                    await SendDmAsync(message.Author, "This guild is missing both WoW Utils and WoW Audit droptimizer credentials. Please ask an admin to check the bot settings.");
+                    await SendDmAsync(message.Author, "This guild needs either WoW Utils or WoW Audit droptimizer credentials configured. Please ask an admin to check the bot settings.");
                     await DeleteAsync(message);
                     return;
                 }
 
-                if (shouldUploadToWoWUtils)
+                if (hasWoWUtilsConfig && hasWoWAuditConfig)
+                    LogInfo($"Both droptimizer providers are configured for guild {guild.Name}; using {uploadTarget} only.");
+
+                if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
                 {
                     var wowUtilsSettings = droptimizer!;
                     var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
@@ -117,7 +121,7 @@ public partial class BotService
                         queuedRetryTimesUtc.Add(retryAtUtc.Value);
                 }
 
-                if (shouldUploadToWoWAudit)
+                if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
                 {
                     var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
                         message,
@@ -160,7 +164,7 @@ public partial class BotService
             if (queuedRetryTimesUtc.Count > 0)
             {
                 var nextRetryAtUtc = queuedRetryTimesUtc.Min();
-                LogInfo($"Queued {queuedRetryTimesUtc.Count} WoW Utils import(s); next retry at {nextRetryAtUtc:O}");
+                LogInfo($"Queued {queuedRetryTimesUtc.Count} droptimizer import retry/retries; next retry at {nextRetryAtUtc:O}");
                 await ReactAsync(message, new Emoji("⏳"));
                 await SendDmAsync(
                     message.Author,

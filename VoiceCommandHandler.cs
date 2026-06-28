@@ -90,7 +90,7 @@ public partial class BotService
 
         var guildId = guildChannel.Guild.Id;
         var currentVoiceChannel = guildChannel.Guild.CurrentUser?.VoiceChannel;
-        if (currentVoiceChannel?.Id == voiceChannel.Id)
+        if (currentVoiceChannel?.Id == voiceChannel.Id && _voiceConnections.ContainsKey(guildId))
         {
             await command.RespondAsync($"I'm already in **{voiceChannel.Name}**.", ephemeral: true);
             return;
@@ -98,8 +98,6 @@ public partial class BotService
 
         try
         {
-            await DisconnectFromGuildVoice(guildId);
-
             if (AppSettings.DryRun)
             {
                 LogInfo($"[DRY RUN] Would join voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guildChannel.Guild.Name}");
@@ -107,8 +105,7 @@ public partial class BotService
                 return;
             }
 
-            var audioClient = await voiceChannel.ConnectAsync(selfDeaf: true);
-            _voiceConnections[guildId] = audioClient;
+            await ConnectToGuildVoiceChannel(guildId, voiceChannel);
 
             LogInfo($"Joined voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guildChannel.Guild.Name}");
             await command.RespondAsync($"Joined **{voiceChannel.Name}**. I'll stay here until `/leave` is used.", ephemeral: true);
@@ -160,5 +157,11 @@ public partial class BotService
         if (currentVoiceChannel != null)
             await currentVoiceChannel.DisconnectAsync();
     }
-}
 
+    private async Task ConnectToGuildVoiceChannel(ulong guildId, SocketVoiceChannel voiceChannel)
+    {
+        await DisconnectFromGuildVoice(guildId);
+        var audioClient = await voiceChannel.ConnectAsync(selfDeaf: true);
+        _voiceConnections[guildId] = audioClient;
+    }
+}
