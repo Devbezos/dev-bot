@@ -896,6 +896,10 @@ public partial class BotService
                         await _discordClient.SendDroptimizerReminders(now);
                         _jobRepository.MarkRan(job.Name);
                         break;
+                    case Constants.Jobs.DroptimizerSync:
+                        await RunWoWUtilsToWoWAuditSync();
+                        _jobRepository.MarkRan(job.Name);
+                        break;
                 }
             }
 
@@ -921,6 +925,7 @@ public partial class BotService
         }
     }
 }
+
 
 
 
