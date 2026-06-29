@@ -6,10 +6,38 @@ namespace dev_bot_tests.Tests;
 public class DroptimizerRoutingTests
 {
     [Fact]
-    public void ResolveDroptimizerUploadTarget_WhenBothProvidersConfigured_PrefersWoWUtils()
+    public void ResolveDroptimizerUploadTarget_WhenBothProvidersConfiguredWithoutSource_FallsBackToWoWUtils()
     {
         var target = ResolveUploadTarget(new DroptimizerSettings
         {
+            GroupId = "group-id",
+            ApiKey = "api-key",
+            Token = "token"
+        });
+
+        Assert.Equal("WoWUtils", target);
+    }
+
+    [Fact]
+    public void ResolveDroptimizerUploadTarget_WhenSourceIsWoWAudit_UsesWoWAudit()
+    {
+        var target = ResolveUploadTarget(new DroptimizerSettings
+        {
+            Source = "wowaudit",
+            GroupId = "group-id",
+            ApiKey = "api-key",
+            Token = "token"
+        });
+
+        Assert.Equal("WoWAudit", target);
+    }
+
+    [Fact]
+    public void ResolveDroptimizerUploadTarget_WhenSourceIsWoWUtils_UsesWoWUtils()
+    {
+        var target = ResolveUploadTarget(new DroptimizerSettings
+        {
+            Source = "wowutils",
             GroupId = "group-id",
             ApiKey = "api-key",
             Token = "token"

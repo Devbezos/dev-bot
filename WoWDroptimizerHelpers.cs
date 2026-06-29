@@ -25,6 +25,14 @@ public partial class BotService
 
     private static DroptimizerUploadTarget? ResolveDroptimizerUploadTarget(DroptimizerSettings? droptimizer)
     {
+        var source = droptimizer?.Source?.Trim().ToLowerInvariant();
+
+        if (source == "wowutils")
+            return HasWoWUtilsConfig(droptimizer) ? DroptimizerUploadTarget.WoWUtils : null;
+
+        if (source == "wowaudit")
+            return HasWoWAuditConfig(droptimizer) ? DroptimizerUploadTarget.WoWAudit : null;
+
         if (HasWoWUtilsConfig(droptimizer))
             return DroptimizerUploadTarget.WoWUtils;
 
