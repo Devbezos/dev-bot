@@ -253,5 +253,3 @@ public sealed class WoWAuditQueuedImport
     public DateTime RetryAtUtc { get; set; }
     public int AttemptCount { get; set; }
 }
-
-

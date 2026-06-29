@@ -13,7 +13,7 @@ public partial class BotService
 
     private async Task SendUpcomingRaidReminders(DateTime nowEastern)
     {
-        foreach (var guild in AppSettings.Guilds.Where(g => g.RaidReminders.Enabled && Helpers.IsGuildActive(g, nowEastern)))
+        foreach (var guild in AppSettings.Guilds.Where(g => HasEnabledRaidReminders(g) && Helpers.IsGuildActive(g, nowEastern)))
         {
             try
             {
@@ -28,36 +28,38 @@ public partial class BotService
 
     private async Task SendUpcomingRaidReminders(GuildSettings guild, DateTime nowEastern)
     {
-        var channelId = ResolveRaidReminderChannelId(guild);
-        if (channelId == 0)
-        {
-            LogWarn($"Raid reminder skipped for guild {guild.Name}: no raid reminder, general, or droptimizer channel is configured");
-            return;
-        }
-
         var raids = await GetScheduledRaids(guild);
         if (raids.Count == 0)
             return;
 
-        var leadMinutes = Math.Max(1, guild.RaidReminders.MinutesBefore);
         var nowUtc = DateTime.UtcNow;
         var state = LoadRaidReminderState();
         var changed = false;
 
-        foreach (var raid in raids.Where(IsSchedulableRaid).OrderBy(r => r.StartsAtUtc))
+        foreach (var reminder in EnumerateRaidReminderRules(guild))
         {
-            var reminderAtUtc = raid.StartsAtUtc.AddMinutes(-leadMinutes);
-            if (nowUtc < reminderAtUtc || nowUtc >= raid.StartsAtUtc)
+            var channelId = ResolveRaidReminderChannelId(guild, reminder);
+            if (channelId == 0)
+            {
+                LogWarn($"Raid reminder skipped for guild {guild.Name}: no channel is configured for reminder {reminder.Key}");
                 continue;
+            }
 
-            var reminderKey = BuildRaidReminderKey(guild.Name, raid, leadMinutes);
-            if (state.SentAtByKey.ContainsKey(reminderKey))
-                continue;
+            foreach (var raid in raids.Where(IsSchedulableRaid).OrderBy(r => r.StartsAtUtc))
+            {
+                var reminderAtUtc = raid.StartsAtUtc.AddMinutes(-reminder.MinutesBefore);
+                if (nowUtc < reminderAtUtc || nowUtc >= raid.StartsAtUtc)
+                    continue;
 
-            await _discordClient.PostToChannel(channelId, BuildRaidReminderMessage(guild, raid, leadMinutes));
-            state.SentAtByKey[reminderKey] = nowUtc;
-            changed = true;
-            LogInfo($"Posted raid reminder for guild {guild.Name}: {raid.Name} via {raid.Provider}");
+                var reminderKey = BuildRaidReminderKey(guild.Name, raid, reminder);
+                if (state.SentAtByKey.ContainsKey(reminderKey))
+                    continue;
+
+                await _discordClient.PostToChannel(channelId, BuildRaidReminderMessage(raid, reminder));
+                state.SentAtByKey[reminderKey] = nowUtc;
+                changed = true;
+                LogInfo($"Posted raid reminder for guild {guild.Name}: {raid.Name} via {raid.Provider} ({reminder.Key})");
+            }
         }
 
         if (changed)
@@ -111,8 +113,44 @@ public partial class BotService
         return !raid.Status.Contains("cancel", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static ulong ResolveRaidReminderChannelId(GuildSettings guild)
+    private static bool HasEnabledRaidReminders(GuildSettings guild) =>
+        EnumerateRaidReminderRules(guild).Count > 0;
+
+    private static List<ResolvedRaidReminder> EnumerateRaidReminderRules(GuildSettings guild)
     {
+        var settings = guild.RaidReminders ?? new RaidReminderSettings();
+        if (!settings.Enabled)
+            return [];
+
+        var reminders = settings.Items?
+            .Where(item => item.Enabled)
+            .Select((item, index) => new ResolvedRaidReminder(
+                Key: $"rule-{index + 1}",
+                MinutesBefore: Math.Max(1, item.MinutesBefore),
+                PingRoles: item.PingRoles,
+                ChannelId: item.ChannelId,
+                RoleIds: item.RoleIds ?? []))
+            .ToList() ?? [];
+
+        if (reminders.Count > 0)
+            return reminders;
+
+        return
+        [
+            new ResolvedRaidReminder(
+                Key: "legacy",
+                MinutesBefore: Math.Max(1, settings.MinutesBefore),
+                PingRoles: settings.PingRoles,
+                ChannelId: null,
+                RoleIds: guild.RolesToPing ?? [])
+        ];
+    }
+
+    private static ulong ResolveRaidReminderChannelId(GuildSettings guild, ResolvedRaidReminder reminder)
+    {
+        if (ulong.TryParse(reminder.ChannelId, out var explicitChannelId) && explicitChannelId != 0)
+            return explicitChannelId;
+
         var channels = guild.Channels ?? new Dictionary<string, ulong>();
         return channels.GetValueOrDefault("raidReminder")
             != 0 ? channels.GetValueOrDefault("raidReminder")
@@ -120,24 +158,21 @@ public partial class BotService
             : channels.GetValueOrDefault("droptimizer");
     }
 
-    private static string BuildRaidReminderMessage(GuildSettings guild, RaidScheduleEvent raid, int leadMinutes)
+    private static string BuildRaidReminderMessage(RaidScheduleEvent raid, ResolvedRaidReminder reminder)
     {
-        var mentionPrefix = guild.RaidReminders.PingRoles && guild.RolesToPing.Length > 0
-            ? string.Join(" ", guild.RolesToPing.Select(roleId => $"<@&{roleId}>")) + " "
+        var mentionPrefix = reminder.PingRoles && reminder.RoleIds.Length > 0
+            ? string.Join(" ", reminder.RoleIds.Select(roleId => $"<@&{roleId}>")) + " "
             : string.Empty;
 
-        var eastern = TZConvert.GetTimeZoneInfo("Eastern Standard Time");
-        var startsEastern = TimeZoneInfo.ConvertTimeFromUtc(raid.StartsAtUtc, eastern);
-        var difficulty = string.IsNullOrWhiteSpace(raid.Difficulty) ? string.Empty : $"{raid.Difficulty} ";
-        var leadText = leadMinutes % 60 == 0
-            ? $"{leadMinutes / 60} hour{(leadMinutes == 60 ? string.Empty : "s")}" 
-            : $"{leadMinutes} minute{(leadMinutes == 1 ? string.Empty : "s")}";
+        var leadText = reminder.MinutesBefore % 60 == 0
+            ? $"{reminder.MinutesBefore / 60} hour{(reminder.MinutesBefore == 60 ? string.Empty : "s")}" 
+            : $"{reminder.MinutesBefore} minute{(reminder.MinutesBefore == 1 ? string.Empty : "s")}";
 
-        return $"{mentionPrefix}Raid reminder: {difficulty}{raid.Name} starts in {leadText} at {startsEastern:dddd h:mm tt} ET ({raid.Provider}).";
+        return $"{mentionPrefix}Raid starts in {leadText}.";
     }
 
-    private static string BuildRaidReminderKey(string guildName, RaidScheduleEvent raid, int leadMinutes) =>
-        $"{guildName}|{NormalizeRaidName(raid.Name)}|{raid.StartsAtUtc:O}|{leadMinutes}";
+    private static string BuildRaidReminderKey(string guildName, RaidScheduleEvent raid, ResolvedRaidReminder reminder) =>
+        $"{guildName}|{NormalizeRaidName(raid.Name)}|{raid.StartsAtUtc:O}|{reminder.Key}|{reminder.MinutesBefore}|{NormalizeReminderChannel(reminder.ChannelId)}|{string.Join(",", reminder.RoleIds)}|{reminder.PingRoles}";
 
     private static string NormalizeRaidName(string name) =>
         string.IsNullOrWhiteSpace(name) ? "raid" : name.Trim().ToLowerInvariant();
@@ -175,4 +210,14 @@ public partial class BotService
             File.WriteAllText(RaidReminderStatePath, JsonSerializer.Serialize(retained, RaidReminderJsonOptions));
         }
     }
+
+    private static string NormalizeReminderChannel(string? channelId) =>
+        string.IsNullOrWhiteSpace(channelId) ? "fallback" : channelId.Trim();
+
+    private sealed record ResolvedRaidReminder(
+        string Key,
+        int MinutesBefore,
+        bool PingRoles,
+        string? ChannelId,
+        string[] RoleIds);
 }
