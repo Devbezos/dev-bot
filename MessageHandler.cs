@@ -82,11 +82,9 @@ public partial class BotService
                 var reportFailed = false;
 
                 var droptimizer = guild.Droptimizer;
-                var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer);
-                var hasWoWUtilsConfig = HasWoWUtilsConfig(droptimizer);
-                var hasWoWAuditConfig = HasWoWAuditConfig(droptimizer);
+                var uploadTargets = ResolveDroptimizerUploadTargets(droptimizer);
 
-                if (uploadTarget == DroptimizerUploadTarget.None)
+                if (uploadTargets.Count == 0)
                 {
                     LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
                     await SendDmAsync(message.Author, "This guild needs either WoW Utils or WoW Audit droptimizer credentials configured. Please ask an admin to check the bot settings.");
@@ -94,52 +92,55 @@ public partial class BotService
                     return;
                 }
 
-                if (hasWoWUtilsConfig && hasWoWAuditConfig)
-                    LogInfo($"Both droptimizer providers are configured for guild {guild.Name}; using {uploadTarget} only.");
+                if (uploadTargets.Count > 1)
+                    LogInfo($"Droptimizer {raidBotsUrl} will upload to multiple providers for guild {guild.Name}: {string.Join(", ", uploadTargets)}");
 
-                if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
+                foreach (var uploadTarget in uploadTargets)
                 {
-                    var wowUtilsSettings = droptimizer!;
-                    var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
-                        message,
-                        guild,
-                        wowUtilsSettings,
-                        raidBotsUrl,
-                        wowUtilsImports,
-                        wowUtilsReports);
-
-                    if (outcome == WoWUtilsImportOutcome.Failed)
+                    if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
                     {
-                        reportFailed = true;
-                    }
-                    else
-                    {
-                        reportImportedOrQueued = true;
-                    }
+                        var wowUtilsSettings = droptimizer!;
+                        var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
+                            message,
+                            guild,
+                            wowUtilsSettings,
+                            raidBotsUrl,
+                            wowUtilsImports,
+                            wowUtilsReports);
 
-                    if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
-                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
-                }
+                        if (outcome == WoWUtilsImportOutcome.Failed)
+                        {
+                            reportFailed = true;
+                        }
+                        else
+                        {
+                            reportImportedOrQueued = true;
+                        }
 
-                if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
-                {
-                    var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
-                        message,
-                        guild,
-                        reportId,
-                        raidBotsUrl);
-
-                    if (outcome == WoWAuditImportOutcome.Failed)
-                    {
-                        reportFailed = true;
-                    }
-                    else
-                    {
-                        reportImportedOrQueued = true;
+                        if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
+                            queuedRetryTimesUtc.Add(retryAtUtc.Value);
                     }
 
-                    if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
-                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                    if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
+                    {
+                        var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
+                            message,
+                            guild,
+                            reportId,
+                            raidBotsUrl);
+
+                        if (outcome == WoWAuditImportOutcome.Failed)
+                        {
+                            reportFailed = true;
+                        }
+                        else
+                        {
+                            reportImportedOrQueued = true;
+                        }
+
+                        if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
+                            queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                    }
                 }
 
                 if (reportFailed && !reportImportedOrQueued)
@@ -165,7 +166,7 @@ public partial class BotService
             {
                 var nextRetryAtUtc = queuedRetryTimesUtc.Min();
                 LogInfo($"Queued {queuedRetryTimesUtc.Count} droptimizer import retry/retries; next retry at {nextRetryAtUtc:O}");
-                await ReactAsync(message, new Emoji("⏳"));
+                await ReactAsync(message, new Emoji("\u23F3"));
                 await SendDmAsync(
                     message.Author,
                     $"One or more droptimizer uploads hit an API limit, so I queued a retry for {nextRetryAtUtc:MMMM d, yyyy h:mm tt} UTC.");
@@ -173,7 +174,7 @@ public partial class BotService
             else
             {
                 LogInfo($"Droptimizer import completed immediately for {raidBotsUrls.Count} report(s)");
-                await ReactAsync(message, new Emoji("✅"));
+                await ReactAsync(message, new Emoji("\u2705"));
             }
 
             if (message.Author.Id == 341726443295866893)
@@ -187,7 +188,7 @@ public partial class BotService
         }
         catch (Exception ex)
         {
-            await ReactAsync(message, new Emoji("❌"));
+            await ReactAsync(message, new Emoji("\u274C"));
             await SendDmAsync(message.Author, "Droptimizer import is currently down. Please try again later.");
             LogError($"MonitorDroptimizers failed: {ex}");
         }
@@ -199,6 +200,4 @@ public partial class BotService
             await ReactAsync(message, emote);
     }
 }
-
-
 

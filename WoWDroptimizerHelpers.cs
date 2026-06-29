@@ -9,7 +9,6 @@ public partial class BotService
 {
     private enum DroptimizerUploadTarget
     {
-        None,
         WoWUtils,
         WoWAudit
     }
@@ -21,15 +20,17 @@ public partial class BotService
     private static bool HasWoWAuditConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.Token);
 
-    private static DroptimizerUploadTarget ResolveDroptimizerUploadTarget(DroptimizerSettings? droptimizer)
+    private static IReadOnlyList<DroptimizerUploadTarget> ResolveDroptimizerUploadTargets(DroptimizerSettings? droptimizer)
     {
+        var targets = new List<DroptimizerUploadTarget>(2);
+
         if (HasWoWUtilsConfig(droptimizer))
-            return DroptimizerUploadTarget.WoWUtils;
+            targets.Add(DroptimizerUploadTarget.WoWUtils);
 
         if (HasWoWAuditConfig(droptimizer))
-            return DroptimizerUploadTarget.WoWAudit;
+            targets.Add(DroptimizerUploadTarget.WoWAudit);
 
-        return DroptimizerUploadTarget.None;
+        return targets;
     }
 
     private async Task<WoWUtilsImportResponse> ImportDroptimizerToWoWUtils(
@@ -80,5 +81,74 @@ public partial class BotService
         throw new InvalidOperationException(
             $"WoW Audit wishlist update failed ({(int)response.StatusCode}): {responseBody}");
     }
-}
 
+    private async Task<bool> TryTrackWoWAuditCharacterForImport(string guildName, string reportId)
+    {
+        WoWUtilsFetchResponse report;
+        try
+        {
+            report = await _wowUtilsClient.GetDroptimizerReport(reportId);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            LogWarn($"WoW Audit roster recovery could not fetch report {reportId}; droptimizer report was not found");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"WoW Audit roster recovery failed to fetch report {reportId}: {ex.Message}");
+            return false;
+        }
+
+        string characterSlug;
+        try
+        {
+            characterSlug = _wowUtilsClient.GetCharacterSlug(report);
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"WoW Audit roster recovery could not determine character for report {reportId}: {ex.Message}");
+            return false;
+        }
+
+        var (name, realm) = ParseCharacterSlug(characterSlug);
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(realm))
+        {
+            LogWarn($"WoW Audit roster recovery parsed an invalid character slug '{characterSlug}' for report {reportId}");
+            return false;
+        }
+
+        await _wowAuditClient.TrackCharacter(guildName, new WoWAuditTrackCharacterRequest
+        {
+            Character = new WoWAuditTrackCharacterPayload
+            {
+                Name = name,
+                Realm = realm
+            }
+        });
+
+        LogInfo($"WoW Audit roster recovery tracked {name}-{realm} for guild {guildName}");
+        return true;
+    }
+
+    private static (string? Name, string? Realm) ParseCharacterSlug(string? characterSlug)
+    {
+        if (string.IsNullOrWhiteSpace(characterSlug))
+            return (null, null);
+
+        var separatorIndex = characterSlug.IndexOf('-');
+        if (separatorIndex <= 0 || separatorIndex >= characterSlug.Length - 1)
+            return (null, null);
+
+        return (
+            characterSlug[..separatorIndex].Trim(),
+            characterSlug[(separatorIndex + 1)..].Trim());
+    }
+
+    private static bool IsMissingWoWAuditRosterError(string? errorMessage) =>
+        !string.IsNullOrWhiteSpace(errorMessage)
+        && (errorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("not tracked", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("track", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("character", StringComparison.OrdinalIgnoreCase) && errorMessage.Contains("missing", StringComparison.OrdinalIgnoreCase));
+}

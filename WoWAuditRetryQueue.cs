@@ -1,4 +1,5 @@
 using DevClient.Data;
+using DevClient.Data.WoW.WoWAudit;
 using Discord;
 using Discord.WebSocket;
 using System.Net;
@@ -19,9 +20,9 @@ public partial class BotService
     {
         try
         {
-            var response = await UpdateWoWAuditWishlist(reportId, guild.Name);
+            var response = await ImportWoWAuditDroptimizer(guild.Name, reportId);
 
-            if (!bool.Parse(response.Created))
+            if (!string.Equals(response.Created, "true", StringComparison.OrdinalIgnoreCase))
             {
                 var errorMessage = response.Base?.FirstOrDefault() ?? "Unknown WoW Audit error";
                 LogWarn($"WoW Audit rejected droptimizer {raidBotsUrl} for guild {guild.Name}: {errorMessage}");
@@ -48,6 +49,25 @@ public partial class BotService
             LogWarn($"WoW Audit returned {(int?)ex.StatusCode ?? 0} for {raidBotsUrl}; queued retry at {retryAtUtc:O}");
             return (WoWAuditImportOutcome.Queued, retryAtUtc);
         }
+    }
+
+    private async Task<WoWAuditWishlistResponse> ImportWoWAuditDroptimizer(string guildName, string reportId, bool allowRosterRecovery = true)
+    {
+        var response = await UpdateWoWAuditWishlist(reportId, guildName);
+        if (string.Equals(response.Created, "true", StringComparison.OrdinalIgnoreCase))
+            return response;
+
+        var errorMessage = response.Base?.FirstOrDefault() ?? "Unknown WoW Audit error";
+        if (!allowRosterRecovery || !IsMissingWoWAuditRosterError(errorMessage))
+            return response;
+
+        LogInfo($"WoW Audit import reported a missing roster character for report {reportId}; attempting roster recovery");
+        var tracked = await TryTrackWoWAuditCharacterForImport(guildName, reportId);
+        if (!tracked)
+            return response;
+
+        LogInfo($"WoW Audit roster recovery succeeded for report {reportId}; retrying wishlist import");
+        return await ImportWoWAuditDroptimizer(guildName, reportId, allowRosterRecovery: false);
     }
 
     private async Task ProcessQueuedWoWAuditImports()
@@ -78,9 +98,9 @@ public partial class BotService
                 }
 
                 LogInfo($"Retrying queued WoW Audit import for {item.ReportUrl} (attempt {item.AttemptCount})");
-                var response = await UpdateWoWAuditWishlist(item.ReportId, guild.Name);
+                var response = await ImportWoWAuditDroptimizer(guild.Name, item.ReportId);
 
-                if (!bool.Parse(response.Created))
+                if (!string.Equals(response.Created, "true", StringComparison.OrdinalIgnoreCase))
                 {
                     var errorMessage = response.Base?.FirstOrDefault() ?? "Unknown WoW Audit error";
                     LogWarn($"Queued WoW Audit import rejected for {item.ReportUrl}: {errorMessage}");
@@ -233,3 +253,5 @@ public sealed class WoWAuditQueuedImport
     public DateTime RetryAtUtc { get; set; }
     public int AttemptCount { get; set; }
 }
+
+
