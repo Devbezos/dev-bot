@@ -4,6 +4,7 @@ using DevClient.Data.WoW.WoWUtils;
 using Newtonsoft.Json;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 
 public partial class BotService
 {
@@ -12,6 +13,8 @@ public partial class BotService
         WoWUtils,
         WoWAudit
     }
+
+    private sealed record RaidBotsCharacterIdentity(string Name, string Realm, string? Spec, string? Role);
 
     private static bool HasWoWUtilsConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.ApiKey)
@@ -84,37 +87,19 @@ public partial class BotService
 
     private async Task<bool> TryTrackWoWAuditCharacterForImport(string guildName, string reportId)
     {
-        WoWUtilsFetchResponse report;
+        RaidBotsCharacterIdentity character;
         try
         {
-            report = await _wowUtilsClient.GetDroptimizerReport(reportId);
+            character = await GetRaidBotsCharacterIdentity(reportId);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            LogWarn($"WoW Audit roster recovery could not fetch report {reportId}; droptimizer report was not found");
+            LogWarn($"WoW Audit roster recovery could not fetch Raidbots input for report {reportId}; droptimizer input was not found");
             return false;
         }
         catch (Exception ex)
         {
-            LogWarn($"WoW Audit roster recovery failed to fetch report {reportId}: {ex.Message}");
-            return false;
-        }
-
-        string characterSlug;
-        try
-        {
-            characterSlug = _wowUtilsClient.GetCharacterSlug(report);
-        }
-        catch (Exception ex)
-        {
-            LogWarn($"WoW Audit roster recovery could not determine character for report {reportId}: {ex.Message}");
-            return false;
-        }
-
-        var (name, realm) = ParseCharacterSlug(characterSlug);
-        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(realm))
-        {
-            LogWarn($"WoW Audit roster recovery parsed an invalid character slug '{characterSlug}' for report {reportId}");
+            LogWarn($"WoW Audit roster recovery failed to read Raidbots input for report {reportId}: {ex.Message}");
             return false;
         }
 
@@ -122,27 +107,65 @@ public partial class BotService
         {
             Character = new WoWAuditTrackCharacterPayload
             {
-                Name = name,
-                Realm = realm
+                Name = character.Name,
+                Realm = character.Realm,
+                Spec = character.Spec,
+                Role = character.Role
             }
         });
 
-        LogInfo($"WoW Audit roster recovery tracked {name}-{realm} for guild {guildName}");
+        LogInfo($"WoW Audit roster recovery tracked {character.Name}-{character.Realm} for guild {guildName}");
         return true;
     }
 
-    private static (string? Name, string? Realm) ParseCharacterSlug(string? characterSlug)
+    private async Task<RaidBotsCharacterIdentity> GetRaidBotsCharacterIdentity(string reportId)
     {
-        if (string.IsNullOrWhiteSpace(characterSlug))
-            return (null, null);
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
-        var separatorIndex = characterSlug.IndexOf('-');
-        if (separatorIndex <= 0 || separatorIndex >= characterSlug.Length - 1)
-            return (null, null);
+        using var response = await client.GetAsync($"https://www.raidbots.com/simbot/report/{reportId}/input.txt");
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            throw new HttpRequestException($"Raidbots input not found for {reportId}", null, response.StatusCode);
 
-        return (
-            characterSlug[..separatorIndex].Trim(),
-            characterSlug[(separatorIndex + 1)..].Trim());
+        response.EnsureSuccessStatusCode();
+        var simcText = await response.Content.ReadAsStringAsync();
+
+        var name = MatchValue(simcText, "^[a-z_]+=\"([^\"]+)\"");
+        var realm = MatchValue(simcText, "^server=(\\S+)");
+        var spec = MatchValue(simcText, "^spec=(\\S+)");
+        var role = NormalizeWoWAuditRole(MatchValue(simcText, "^role=(\\S+)"));
+
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException($"Could not determine character name from Raidbots input for {reportId}");
+        if (string.IsNullOrWhiteSpace(realm))
+            throw new InvalidOperationException($"Could not determine character realm from Raidbots input for {reportId}");
+
+        return new RaidBotsCharacterIdentity(name, realm, spec, role);
+    }
+
+    private static string? MatchValue(string text, string pattern)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var match = Regex.Match(text, pattern, RegexOptions.Multiline | RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    private static string? NormalizeWoWAuditRole(string? role)
+    {
+        if (string.IsNullOrWhiteSpace(role))
+            return null;
+
+        return role.Trim().ToLowerInvariant() switch
+        {
+            "tank" => "Tank",
+            "heal" => "Heal",
+            "healer" => "Heal",
+            "melee" => "Melee",
+            "ranged" => "Ranged",
+            _ => role
+        };
     }
 
     private static bool IsMissingWoWAuditRosterError(string? errorMessage) =>
@@ -155,4 +178,3 @@ public partial class BotService
             || errorMessage.Contains("track", StringComparison.OrdinalIgnoreCase)
             || errorMessage.Contains("character", StringComparison.OrdinalIgnoreCase) && errorMessage.Contains("missing", StringComparison.OrdinalIgnoreCase));
 }
-
