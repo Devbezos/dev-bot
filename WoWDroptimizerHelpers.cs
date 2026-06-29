@@ -148,7 +148,11 @@ public partial class BotService
     private static bool IsMissingWoWAuditRosterError(string? errorMessage) =>
         !string.IsNullOrWhiteSpace(errorMessage)
         && (errorMessage.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("couldn't find a matching character", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("could not find a matching character", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("matching character", StringComparison.OrdinalIgnoreCase)
             || errorMessage.Contains("not tracked", StringComparison.OrdinalIgnoreCase)
             || errorMessage.Contains("track", StringComparison.OrdinalIgnoreCase)
             || errorMessage.Contains("character", StringComparison.OrdinalIgnoreCase) && errorMessage.Contains("missing", StringComparison.OrdinalIgnoreCase));
 }
+
