@@ -71,20 +71,20 @@ public partial class BotService
     {
         if (command.GuildId is null || command.Channel is not SocketGuildChannel guildChannel)
         {
-            await command.RespondAsync("`/summon` only works inside a server.", ephemeral: true);
+            await RespondToCommandAsync(command, "`/summon` only works inside a server.");
             return;
         }
 
         if (command.User is not SocketGuildUser guildUser)
         {
-            await command.RespondAsync("I couldn't resolve your server member state.", ephemeral: true);
+            await RespondToCommandAsync(command, "I couldn't resolve your server member state.");
             return;
         }
 
         var voiceChannel = guildUser.VoiceChannel;
         if (voiceChannel == null)
         {
-            await command.RespondAsync("Join a voice channel first, then use `/summon`.", ephemeral: true);
+            await RespondToCommandAsync(command, "Join a voice channel first, then use `/summon`.");
             return;
         }
 
@@ -92,28 +92,30 @@ public partial class BotService
         var currentVoiceChannel = guildChannel.Guild.CurrentUser?.VoiceChannel;
         if (currentVoiceChannel?.Id == voiceChannel.Id && _voiceConnections.ContainsKey(guildId))
         {
-            await command.RespondAsync($"I'm already in **{voiceChannel.Name}**.", ephemeral: true);
+            await RespondToCommandAsync(command, $"I'm already in **{voiceChannel.Name}**.");
             return;
         }
 
         try
         {
+            await command.DeferAsync(ephemeral: true);
+
             if (AppSettings.DryRun)
             {
                 LogInfo($"[DRY RUN] Would join voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guildChannel.Guild.Name}");
-                await command.RespondAsync($"[Dry run] I'd join **{voiceChannel.Name}** and stay there until `/leave`.", ephemeral: true);
+                await RespondToCommandAsync(command, $"[Dry run] I'd join **{voiceChannel.Name}** and stay there until `/leave`.");
                 return;
             }
 
             await ConnectToGuildVoiceChannel(guildId, voiceChannel);
 
             LogInfo($"Joined voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guildChannel.Guild.Name}");
-            await command.RespondAsync($"Joined **{voiceChannel.Name}**. I'll stay here until `/leave` is used.", ephemeral: true);
+            await RespondToCommandAsync(command, $"Joined **{voiceChannel.Name}**. I'll stay here until `/leave` is used.");
         }
         catch (Exception ex)
         {
             LogError($"Failed to join voice channel {voiceChannel.Id} in guild {guildId}: {ex}");
-            await command.RespondAsync("I couldn't join that voice channel. I may be missing permission to view or connect to it.", ephemeral: true);
+            await RespondToCommandAsync(command, "I couldn't join that voice channel. I may be missing permission to view or connect to it.");
         }
     }
 
@@ -136,6 +138,19 @@ public partial class BotService
         await DisconnectFromGuildVoice(guild.Id);
         LogInfo($"Left voice channel for guild {guild.Name} ({guild.Id})");
         await command.RespondAsync("Left the voice channel.", ephemeral: true);
+    }
+
+    private static Task RespondToCommandAsync(SocketSlashCommand command, string message)
+    {
+        if (command.HasResponded)
+        {
+            return command.ModifyOriginalResponseAsync(properties =>
+            {
+                properties.Content = message;
+            });
+        }
+
+        return command.RespondAsync(message, ephemeral: true);
     }
 
     private async Task DisconnectFromGuildVoice(ulong guildId)
