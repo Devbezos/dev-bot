@@ -82,9 +82,9 @@ public partial class BotService
                 var reportFailed = false;
 
                 var droptimizer = guild.Droptimizer;
-                var uploadTargets = ResolveDroptimizerUploadTargets(droptimizer);
+                var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer);
 
-                if (uploadTargets.Count == 0)
+                if (!uploadTarget.HasValue)
                 {
                     LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
                     await SendDmAsync(message.Author, "This guild needs either WoW Utils or WoW Audit droptimizer credentials configured. Please ask an admin to check the bot settings.");
@@ -92,55 +92,49 @@ public partial class BotService
                     return;
                 }
 
-                if (uploadTargets.Count > 1)
-                    LogInfo($"Droptimizer {raidBotsUrl} will upload to multiple providers for guild {guild.Name}: {string.Join(", ", uploadTargets)}");
-
-                foreach (var uploadTarget in uploadTargets)
+                if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
                 {
-                    if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
+                    var wowUtilsSettings = droptimizer!;
+                    var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
+                        message,
+                        guild,
+                        wowUtilsSettings,
+                        raidBotsUrl,
+                        wowUtilsImports,
+                        wowUtilsReports);
+
+                    if (outcome == WoWUtilsImportOutcome.Failed)
                     {
-                        var wowUtilsSettings = droptimizer!;
-                        var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
-                            message,
-                            guild,
-                            wowUtilsSettings,
-                            raidBotsUrl,
-                            wowUtilsImports,
-                            wowUtilsReports);
-
-                        if (outcome == WoWUtilsImportOutcome.Failed)
-                        {
-                            reportFailed = true;
-                        }
-                        else
-                        {
-                            reportImportedOrQueued = true;
-                        }
-
-                        if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
-                            queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                        reportFailed = true;
+                    }
+                    else
+                    {
+                        reportImportedOrQueued = true;
                     }
 
-                    if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
+                    if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
+                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                }
+
+                if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
+                {
+                    var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
+                        message,
+                        guild,
+                        reportId,
+                        raidBotsUrl);
+
+                    if (outcome == WoWAuditImportOutcome.Failed)
                     {
-                        var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
-                            message,
-                            guild,
-                            reportId,
-                            raidBotsUrl);
-
-                        if (outcome == WoWAuditImportOutcome.Failed)
-                        {
-                            reportFailed = true;
-                        }
-                        else
-                        {
-                            reportImportedOrQueued = true;
-                        }
-
-                        if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
-                            queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                        reportFailed = true;
                     }
+                    else
+                    {
+                        reportImportedOrQueued = true;
+                    }
+
+                    if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
+                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
                 }
 
                 if (reportFailed && !reportImportedOrQueued)
@@ -200,4 +194,3 @@ public partial class BotService
             await ReactAsync(message, emote);
     }
 }
-

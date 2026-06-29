@@ -6,56 +6,55 @@ namespace dev_bot_tests.Tests;
 public class DroptimizerRoutingTests
 {
     [Fact]
-    public void ResolveDroptimizerUploadTargets_WhenBothProvidersConfigured_ReturnsBothProviders()
+    public void ResolveDroptimizerUploadTarget_WhenBothProvidersConfigured_PrefersWoWUtils()
     {
-        var targets = ResolveUploadTargets(new DroptimizerSettings
+        var target = ResolveUploadTarget(new DroptimizerSettings
         {
             GroupId = "group-id",
             ApiKey = "api-key",
             Token = "token"
         });
 
-        Assert.Equal(["WoWUtils", "WoWAudit"], targets);
+        Assert.Equal("WoWUtils", target);
     }
 
     [Fact]
-    public void ResolveDroptimizerUploadTargets_WhenOnlyWoWUtilsConfigured_UsesWoWUtils()
+    public void ResolveDroptimizerUploadTarget_WhenOnlyWoWUtilsConfigured_UsesWoWUtils()
     {
-        var targets = ResolveUploadTargets(new DroptimizerSettings
+        var target = ResolveUploadTarget(new DroptimizerSettings
         {
             GroupId = "group-id",
             ApiKey = "api-key"
         });
 
-        Assert.Equal(["WoWUtils"], targets);
+        Assert.Equal("WoWUtils", target);
     }
 
     [Fact]
-    public void ResolveDroptimizerUploadTargets_WhenOnlyWoWAuditConfigured_UsesWoWAudit()
+    public void ResolveDroptimizerUploadTarget_WhenOnlyWoWAuditConfigured_UsesWoWAudit()
     {
-        var targets = ResolveUploadTargets(new DroptimizerSettings
+        var target = ResolveUploadTarget(new DroptimizerSettings
         {
             Token = "token"
         });
 
-        Assert.Equal(["WoWAudit"], targets);
+        Assert.Equal("WoWAudit", target);
     }
 
     [Fact]
-    public void ResolveDroptimizerUploadTargets_WhenNoProviderConfigured_ReturnsEmpty()
+    public void ResolveDroptimizerUploadTarget_WhenNoProviderConfigured_ReturnsNull()
     {
-        var targets = ResolveUploadTargets(new DroptimizerSettings());
+        var target = ResolveUploadTarget(new DroptimizerSettings());
 
-        Assert.Empty(targets);
+        Assert.Null(target);
     }
 
-    private static string[] ResolveUploadTargets(DroptimizerSettings settings)
+    private static string? ResolveUploadTarget(DroptimizerSettings settings)
     {
         var method = typeof(BotService).GetMethod(
-            "ResolveDroptimizerUploadTargets",
+            "ResolveDroptimizerUploadTarget",
             BindingFlags.NonPublic | BindingFlags.Static);
 
-        var targets = (System.Collections.IEnumerable)method!.Invoke(null, [settings])!;
-        return targets.Cast<object>().Select(target => target.ToString() ?? string.Empty).ToArray();
+        return method!.Invoke(null, [settings])?.ToString();
     }
 }

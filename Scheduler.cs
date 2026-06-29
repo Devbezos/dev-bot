@@ -16,7 +16,7 @@ public partial class BotService
     private static readonly JsonSerializerOptions TcgNotificationJsonOptions = new() { WriteIndented = true };
     private static string TcgNotificationStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-notified-products.json");
 
-    private static string NormalizeStore(string store) => store.Replace(" 💸 Expensive", "", StringComparison.Ordinal).Trim();
+    private static string NormalizeStore(string store) => store.Replace(" ðŸ’¸ Expensive", "", StringComparison.Ordinal).Trim();
 
     private static string NormalizeProductName(string name)
     {
@@ -51,7 +51,7 @@ public partial class BotService
 
     private static bool IsMainResult(Search search, Product product)
     {
-        if (search.Store.Contains("💸", StringComparison.Ordinal)) return false;
+        if (search.Store.Contains("ðŸ’¸", StringComparison.Ordinal)) return false;
         if (LanguageRegex.IsMatch(product.Name)) return false;
         return true;
     }
@@ -465,12 +465,12 @@ public partial class BotService
                     return;
                 }
 
-                LogInfo($"Pokemon Center queue/security active fingerprint changed; notification sent — {snapshot.Summary.Replace("\n", " | ")}");
+                LogInfo($"Pokemon Center queue/security active fingerprint changed; notification sent â€” {snapshot.Summary.Replace("\n", " | ")}");
             }
 
             _pokemonCenterSecurityStateRepository.Set(nextState);
             if (!shouldNotifyActiveSecurity)
-                LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")} — {snapshot.Summary.Replace("\n", " | ")}");
+                LogInfo($"Pokemon Center queue/security status unchanged: {(currentSecurityDetected ? "active" : "inactive")} â€” {snapshot.Summary.Replace("\n", " | ")}");
             return;
         }
 
@@ -753,7 +753,7 @@ public partial class BotService
                         var results = await scraper.Run();
                         var nonEmpty = results.Where(r => r.Products.Any()).ToList();
                         tcgResults.AddRange(nonEmpty);
-                        LogInfo($"TCG scrape finished: {scraper.Name} — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+                        LogInfo($"TCG scrape finished: {scraper.Name} â€” {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
                     }
                     catch (Exception ex)
                     {
@@ -819,7 +819,7 @@ public partial class BotService
                         var results = await scraper.Run();
                         var nonEmpty = results.Where(r => r.Products.Any()).ToList();
                         gundamResults.AddRange(nonEmpty);
-                        LogInfo($"Gundam scrape finished: {scraper.Name} — {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+                        LogInfo($"Gundam scrape finished: {scraper.Name} â€” {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
                     }
                     catch (Exception ex)
                     {
@@ -894,6 +894,10 @@ public partial class BotService
                 {
                     case Constants.Jobs.DroptimizerReminder:
                         await _discordClient.SendDroptimizerReminders(now);
+                        _jobRepository.MarkRan(job.Name);
+                        break;
+                    case Constants.Jobs.RaidReminder:
+                        await SendUpcomingRaidReminders(now);
                         _jobRepository.MarkRan(job.Name);
                         break;
                     case Constants.Jobs.DroptimizerSync:

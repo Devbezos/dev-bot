@@ -23,17 +23,15 @@ public partial class BotService
     private static bool HasWoWAuditConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.Token);
 
-    private static IReadOnlyList<DroptimizerUploadTarget> ResolveDroptimizerUploadTargets(DroptimizerSettings? droptimizer)
+    private static DroptimizerUploadTarget? ResolveDroptimizerUploadTarget(DroptimizerSettings? droptimizer)
     {
-        var targets = new List<DroptimizerUploadTarget>(2);
-
         if (HasWoWUtilsConfig(droptimizer))
-            targets.Add(DroptimizerUploadTarget.WoWUtils);
+            return DroptimizerUploadTarget.WoWUtils;
 
         if (HasWoWAuditConfig(droptimizer))
-            targets.Add(DroptimizerUploadTarget.WoWAudit);
+            return DroptimizerUploadTarget.WoWAudit;
 
-        return targets;
+        return null;
     }
 
     private async Task<WoWUtilsImportResponse> ImportDroptimizerToWoWUtils(
