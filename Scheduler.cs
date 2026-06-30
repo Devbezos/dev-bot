@@ -882,6 +882,7 @@ public partial class BotService
                 var gundamResults = new List<Search>();
                 var gundamScrapers = new (string Name, Func<Task<List<Search>>> Run)[]
                 {
+                    ("401Games Gundam", () => new _401GamesClient(_tcgSourceUrlRepository).GetGundam()),
                     ("Atlas Gundam", () => new AtlasClient(_tcgSourceUrlRepository).GetGundam()),
                     ("Dollys Gundam", () => new DollysClient(_tcgSourceUrlRepository).GetGundam()),
                     ("Shopify Gundam", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetGundam(
@@ -1000,6 +1001,7 @@ public partial class BotService
         }
     }
 }
+
 
 
 
