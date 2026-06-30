@@ -27,170 +27,180 @@ public partial class BotService
 
     public async Task MonitorMessages(SocketMessage message)
     {
-        if (message.Author.IsBot) return;
-
-        ReloadGuildsIfStale();
-        ReloadAutoReactionsIfStale();
-
-        var autoReactions = ResolveAutoReactionEmotes(message).ToArray();
-        if (autoReactions.Length > 0)
+        await RunLoggedAsync(async () =>
         {
-            LogInfo($"Applying {autoReactions.Length} auto reaction(s) to message {message.Id} from {message.Author.Username}");
-            _ = ApplyAutoReactionsInOrder(message, autoReactions);
-        }
+            if (message.Author.IsBot) return;
 
-        var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
-            g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
+            ReloadGuildsIfStale();
+            ReloadAutoReactionsIfStale();
 
-        if (matchedGuild != null)
-        {
-            LogInfo($"Message from {message.Author.Username} in #{message.Channel.Name}");
-            await MonitorDroptimizers(message);
-        }
+            var autoReactions = ResolveAutoReactionEmotes(message).ToArray();
+            if (autoReactions.Length > 0)
+            {
+                LogInfo($"Applying {autoReactions.Length} auto reaction(s) to message {message.Id} from {message.Author.Username}");
+                _ = ApplyAutoReactionsInOrder(message, autoReactions);
+            }
+
+            var matchedGuild = AppSettings.Guilds.FirstOrDefault(g =>
+                g.Features.Droptimizer && g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
+
+            if (matchedGuild != null)
+            {
+                LogInfo($"Message from {message.Author.Username} in #{message.Channel.Name}");
+                await MonitorDroptimizers(message);
+            }
+        }, $"messageId={message.Id}");
     }
 
     public async Task MonitorDroptimizers(SocketMessage message)
     {
-        LogInfo($"Processing message from {message.Author.Username} in #{message.Channel.Name}");
-        var raidBotsUrls = Helpers.ExtractUrls(message.Content);
-        var guild = AppSettings.Guilds.First(g => g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
-
-        if (raidBotsUrls.Count == 0)
+        await RunLoggedAsync(async () =>
         {
-            if (!((SocketGuildUser)message.Author).GuildPermissions.Administrator)
+            LogInfo($"Processing message from {message.Author.Username} in #{message.Channel.Name}");
+            var raidBotsUrls = Helpers.ExtractUrls(message.Content);
+            var guild = AppSettings.Guilds.First(g => g.Channels?.GetValueOrDefault("droptimizer") == message.Channel.Id);
+
+            if (raidBotsUrls.Count == 0)
             {
-                LogWarn($"Deleted invalid message from {message.Author.Username}: {message.Content}");
-                await DeleteAsync(message);
-            }
-            return;
-        }
-
-        LogInfo("Processing droptimizer reports");
-
-        try
-        {
-            var itemUpgrades = new List<ItemUpgrade>();
-            var queuedRetryTimesUtc = new List<DateTime>();
-            var wowUtilsReports = new Dictionary<string, WoWUtilsFetchResponse>(StringComparer.OrdinalIgnoreCase);
-            var wowUtilsImports = new Dictionary<string, WoWUtilsImportResponse>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var raidBotsUrl in raidBotsUrls)
-            {
-                var reportId = raidBotsUrl.Split('/').Last();
-                LogInfo($"Processing {raidBotsUrl}");
-                var reportImportedOrQueued = false;
-                var reportFailed = false;
-
-                var droptimizer = guild.Droptimizer;
-                var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer);
-
-                if (!uploadTarget.HasValue)
+                if (!((SocketGuildUser)message.Author).GuildPermissions.Administrator)
                 {
-                    LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
-                    await SendDmAsync(message.Author, "This guild needs either WoW Utils or WoW Audit droptimizer credentials configured. Please ask an admin to check the bot settings.");
+                    LogWarn($"Deleted invalid message from {message.Author.Username}: {message.Content}");
                     await DeleteAsync(message);
-                    return;
                 }
+                return;
+            }
 
-                if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
+            LogInfo("Processing droptimizer reports");
+
+            try
+            {
+                var itemUpgrades = new List<ItemUpgrade>();
+                var queuedRetryTimesUtc = new List<DateTime>();
+                var wowUtilsReports = new Dictionary<string, WoWUtilsFetchResponse>(StringComparer.OrdinalIgnoreCase);
+                var wowUtilsImports = new Dictionary<string, WoWUtilsImportResponse>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var raidBotsUrl in raidBotsUrls)
                 {
-                    var wowUtilsSettings = droptimizer!;
-                    var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
-                        message,
-                        guild,
-                        wowUtilsSettings,
-                        raidBotsUrl,
-                        wowUtilsImports,
-                        wowUtilsReports);
+                    var reportId = raidBotsUrl.Split('/').Last();
+                    LogInfo($"Processing {raidBotsUrl}");
+                    var reportImportedOrQueued = false;
+                    var reportFailed = false;
 
-                    if (outcome == WoWUtilsImportOutcome.Failed)
-                    {
-                        reportFailed = true;
-                    }
-                    else
-                    {
-                        reportImportedOrQueued = true;
-                    }
+                    var droptimizer = guild.Droptimizer;
+                    var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer);
 
-                    if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
-                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
-                }
-
-                if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
-                {
-                    var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
-                        message,
-                        guild,
-                        reportId,
-                        raidBotsUrl);
-
-                    if (outcome == WoWAuditImportOutcome.Failed)
+                    if (!uploadTarget.HasValue)
                     {
-                        reportFailed = true;
-                    }
-                    else
-                    {
-                        reportImportedOrQueued = true;
+                        LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
+                        await SendDmAsync(message.Author, "This guild needs either WoW Utils or WoW Audit droptimizer credentials configured. Please ask an admin to check the bot settings.");
+                        await DeleteAsync(message);
+                        return;
                     }
 
-                    if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
-                        queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                    if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
+                    {
+                        var wowUtilsSettings = droptimizer!;
+                        var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
+                            message,
+                            guild,
+                            wowUtilsSettings,
+                            raidBotsUrl,
+                            wowUtilsImports,
+                            wowUtilsReports);
+
+                        if (outcome == WoWUtilsImportOutcome.Failed)
+                        {
+                            reportFailed = true;
+                        }
+                        else
+                        {
+                            reportImportedOrQueued = true;
+                        }
+
+                        if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
+                            queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                    }
+
+                    if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
+                    {
+                        var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
+                            message,
+                            guild,
+                            reportId,
+                            raidBotsUrl);
+
+                        if (outcome == WoWAuditImportOutcome.Failed)
+                        {
+                            reportFailed = true;
+                        }
+                        else
+                        {
+                            reportImportedOrQueued = true;
+                        }
+
+                        if (outcome == WoWAuditImportOutcome.Queued && retryAtUtc.HasValue)
+                            queuedRetryTimesUtc.Add(retryAtUtc.Value);
+                    }
+
+                    if (reportFailed && !reportImportedOrQueued)
+                    {
+                        await DeleteAsync(message);
+                        return;
+                    }
+
+                    var validGoogleSheetsReport = await _raidBotsClient.IsValidReport(raidBotsUrl);
+                    if (guild.Name == "REFINED" && validGoogleSheetsReport)
+                    {
+                        itemUpgrades = await _raidBotsClient.GetItemUpgrades(itemUpgrades, reportId);
+                    }
                 }
 
-                if (reportFailed && !reportImportedOrQueued)
+                if (itemUpgrades.Count > 0)
                 {
-                    await DeleteAsync(message);
-                    return;
+                    LogInfo($"Updating Google Sheet with {itemUpgrades.Count} item upgrade(s)");
+                    await _googleSheetsClient.UpdateSheet(itemUpgrades);
                 }
 
-                var validGoogleSheetsReport = await _raidBotsClient.IsValidReport(raidBotsUrl);
-                if (guild.Name == "REFINED" && validGoogleSheetsReport)
+                if (queuedRetryTimesUtc.Count > 0)
                 {
-                    itemUpgrades = await _raidBotsClient.GetItemUpgrades(itemUpgrades, reportId);
+                    var nextRetryAtUtc = queuedRetryTimesUtc.Min();
+                    LogInfo($"Queued {queuedRetryTimesUtc.Count} droptimizer import retry/retries; next retry at {nextRetryAtUtc:O}");
+                    await ReactAsync(message, new Emoji("\u23F3"));
+                    await SendDmAsync(
+                        message.Author,
+                        $"One or more droptimizer uploads hit an API limit, so I queued a retry for {nextRetryAtUtc:MMMM d, yyyy h:mm tt} UTC.");
                 }
-            }
+                else
+                {
+                    LogInfo($"Droptimizer import completed immediately for {raidBotsUrls.Count} report(s)");
+                    await ReactAsync(message, new Emoji("\u2705"));
+                }
 
-            if (itemUpgrades.Count > 0)
-            {
-                LogInfo($"Updating Google Sheet with {itemUpgrades.Count} item upgrade(s)");
-                await _googleSheetsClient.UpdateSheet(itemUpgrades);
-            }
+                if (message.Author.Id == 341726443295866893)
+                {
+                    var textChannel = message.Channel as ITextChannel;
+                    if (textChannel != null)
+                        await textChannel.SendMessageAsync("https://tenor.com/view/bosnov-67-bosnov-67-67-meme-gif-16727368109953357722", messageReference: new MessageReference(message.Id));
+                }
 
-            if (queuedRetryTimesUtc.Count > 0)
-            {
-                var nextRetryAtUtc = queuedRetryTimesUtc.Min();
-                LogInfo($"Queued {queuedRetryTimesUtc.Count} droptimizer import retry/retries; next retry at {nextRetryAtUtc:O}");
-                await ReactAsync(message, new Emoji("\u23F3"));
-                await SendDmAsync(
-                    message.Author,
-                    $"One or more droptimizer uploads hit an API limit, so I queued a retry for {nextRetryAtUtc:MMMM d, yyyy h:mm tt} UTC.");
+                LogInfo("Done");
             }
-            else
+            catch (Exception ex)
             {
-                LogInfo($"Droptimizer import completed immediately for {raidBotsUrls.Count} report(s)");
-                await ReactAsync(message, new Emoji("\u2705"));
+                await ReactAsync(message, new Emoji("\u274C"));
+                await SendDmAsync(message.Author, "Droptimizer import is currently down. Please try again later.");
+                LogException(ex, $"messageId={message.Id}");
+                LogError($"MonitorDroptimizers failed: {ex}");
             }
-
-            if (message.Author.Id == 341726443295866893)
-            {
-                var textChannel = message.Channel as ITextChannel;
-                if (textChannel != null)
-                    await textChannel.SendMessageAsync("https://tenor.com/view/bosnov-67-bosnov-67-67-meme-gif-16727368109953357722", messageReference: new MessageReference(message.Id));
-            }
-
-            LogInfo("Done");
-        }
-        catch (Exception ex)
-        {
-            await ReactAsync(message, new Emoji("\u274C"));
-            await SendDmAsync(message.Author, "Droptimizer import is currently down. Please try again later.");
-            LogError($"MonitorDroptimizers failed: {ex}");
-        }
+        }, $"messageId={message.Id}");
     }
 
     private async Task ApplyAutoReactionsInOrder(SocketMessage message, IEmote[] emotes)
     {
-        foreach (var emote in emotes)
-            await ReactAsync(message, emote);
+        await RunLoggedAsync(async () =>
+        {
+            foreach (var emote in emotes)
+                await ReactAsync(message, emote);
+        }, $"messageId={message.Id}, emoteCount={emotes.Length}");
     }
 }

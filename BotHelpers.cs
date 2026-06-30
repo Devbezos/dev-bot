@@ -110,63 +110,144 @@ public partial class BotService
 
     public async Task ReplyToSpecificMessage(ulong channelId, ulong messageId, string replyContent)
     {
-        LogInfo($"Replying to message {messageId} in channel {channelId}");
-        var channel = await _discordBotClient.GetChannelAsync(channelId) as SocketTextChannel;
-        if (channel == null)
+        await RunLoggedAsync(async () =>
         {
-            LogWarn($"Channel {channelId} not found");
-            return;
-        }
+            LogInfo($"Replying to message {messageId} in channel {channelId}");
+            var channel = await _discordBotClient.GetChannelAsync(channelId) as SocketTextChannel;
+            if (channel == null)
+            {
+                LogWarn($"Channel {channelId} not found");
+                return;
+            }
 
-        var message = await channel.GetMessageAsync(messageId) as IUserMessage;
+            var message = await channel.GetMessageAsync(messageId) as IUserMessage;
 
-        if (message == null)
-        {
-            LogWarn($"Message {messageId} not found");
-            return;
-        }
+            if (message == null)
+            {
+                LogWarn($"Message {messageId} not found");
+                return;
+            }
 
-        await channel.SendMessageAsync(text: replyContent, messageReference: new MessageReference(message.Id));
+            await channel.SendMessageAsync(text: replyContent, messageReference: new MessageReference(message.Id));
+        }, $"channelId={channelId}, messageId={messageId}");
     }
 
     private async Task PlaySound(IAudioClient client, string filePath)
     {
-        LogInfo($"Playing {filePath}");
-        using var ffmpeg = CreateStream(filePath);
-        using var output = ffmpeg.StandardOutput.BaseStream;
-        using var discord = client.CreatePCMStream(AudioApplication.Voice);
+        await RunLoggedAsync(async () =>
+        {
+            LogInfo($"Playing {filePath}");
+            using var ffmpeg = CreateStream(filePath);
+            using var output = ffmpeg.StandardOutput.BaseStream;
+            using var discord = client.CreatePCMStream(AudioApplication.Voice);
 
-        try
-        {
-            await output.CopyToAsync(discord);
-        }
-        finally
-        {
-            await discord.FlushAsync();
-        }
+            try
+            {
+                await output.CopyToAsync(discord);
+            }
+            finally
+            {
+                await discord.FlushAsync();
+            }
+        }, filePath);
     }
 
     private Process CreateStream(string filePath)
     {
-        LogInfo($"Creating stream for {filePath}");
-        var process = new Process
+        return RunLogged(() =>
         {
-            StartInfo = new ProcessStartInfo
+            LogInfo($"Creating stream for {filePath}");
+            var process = new Process
             {
-                FileName = "ffmpeg",
-                Arguments = $"-i \"{filePath}\" -filter:a \"volume=1\" -ac 2 -f s16le -ar 48000 pipe:1",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
-        };
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = $"-i \"{filePath}\" -filter:a \"volume=1\" -ac 2 -f s16le -ar 48000 pipe:1",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
 
-        process.ErrorDataReceived += (sender, e) => { if (e.Data != null) LogError($"FFmpeg error: {e.Data}"); };
-        process.Start();
-        process.BeginErrorReadLine();
-        return process;
+            process.ErrorDataReceived += (sender, e) => { if (e.Data != null) LogError($"FFmpeg error: {e.Data}"); };
+            process.Start();
+            process.BeginErrorReadLine();
+            return process;
+        }, filePath);
     }
+
+    private async Task RunLoggedAsync(Func<Task> action, string? detail = null, [CallerMemberName] string method = "")
+    {
+        var stopwatch = Stopwatch.StartNew();
+        LogInfo($"BEGIN{FormatLogDetail(detail)}", method);
+        try
+        {
+            await action();
+            LogInfo($"END ({stopwatch.ElapsedMilliseconds} ms){FormatLogDetail(detail)}", method);
+        }
+        catch (Exception ex)
+        {
+            LogException(ex, detail, method);
+            throw;
+        }
+    }
+
+    private async Task<T> RunLoggedAsync<T>(Func<Task<T>> action, string? detail = null, [CallerMemberName] string method = "")
+    {
+        var stopwatch = Stopwatch.StartNew();
+        LogInfo($"BEGIN{FormatLogDetail(detail)}", method);
+        try
+        {
+            var result = await action();
+            LogInfo($"END ({stopwatch.ElapsedMilliseconds} ms){FormatLogDetail(detail)}", method);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            LogException(ex, detail, method);
+            throw;
+        }
+    }
+
+    private void RunLogged(Action action, string? detail = null, [CallerMemberName] string method = "")
+    {
+        var stopwatch = Stopwatch.StartNew();
+        LogInfo($"BEGIN{FormatLogDetail(detail)}", method);
+        try
+        {
+            action();
+            LogInfo($"END ({stopwatch.ElapsedMilliseconds} ms){FormatLogDetail(detail)}", method);
+        }
+        catch (Exception ex)
+        {
+            LogException(ex, detail, method);
+            throw;
+        }
+    }
+
+    private T RunLogged<T>(Func<T> action, string? detail = null, [CallerMemberName] string method = "")
+    {
+        var stopwatch = Stopwatch.StartNew();
+        LogInfo($"BEGIN{FormatLogDetail(detail)}", method);
+        try
+        {
+            var result = action();
+            LogInfo($"END ({stopwatch.ElapsedMilliseconds} ms){FormatLogDetail(detail)}", method);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            LogException(ex, detail, method);
+            throw;
+        }
+    }
+
+    private void LogException(Exception ex, string? detail = null, [CallerMemberName] string method = "") =>
+        Serilog.Log.ForContext("SourceContext", $"BotService.{method}").Error(ex, "EXCEPTION{Detail}", FormatLogDetail(detail));
+
+    private static string FormatLogDetail(string? detail) =>
+        string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
 
     private void LogInfo(string msg, [CallerMemberName] string method = "") =>
         Serilog.Log.ForContext("SourceContext", $"BotService.{method}").Information("{Message}", msg);
@@ -177,9 +258,3 @@ public partial class BotService
     private void LogError(string msg, [CallerMemberName] string method = "") =>
         Serilog.Log.ForContext("SourceContext", $"BotService.{method}").Error("{Message}", msg);
 }
-
-
-
-
-
-
