@@ -332,14 +332,24 @@ public partial class BotService
 
     private ulong[] GetConfiguredChannelIds(string settingsKey, bool fallbackToSharedPreorder = false)
     {
-        var channelIds = _tcgChannelSettingsRepository.GetChannelIds(settingsKey);
+        var channelIds = ReadConfiguredChannelIds(settingsKey);
         if (channelIds.Length == 0 && fallbackToSharedPreorder && !settingsKey.Equals("preorder", StringComparison.OrdinalIgnoreCase))
-            channelIds = _tcgChannelSettingsRepository.GetChannelIds("preorder");
+            channelIds = ReadConfiguredChannelIds("preorder");
 
         return channelIds
             .Where(id => id != 0)
             .Distinct()
             .ToArray();
+    }
+
+    private ulong[] ReadConfiguredChannelIds(string settingsKey)
+    {
+        var channelIdsMethod = _tcgChannelSettingsRepository.GetType().GetMethod("GetChannelIds", [typeof(string)]);
+        if (channelIdsMethod?.Invoke(_tcgChannelSettingsRepository, [settingsKey]) is IEnumerable<ulong> channelIds)
+            return channelIds.Where(id => id != 0).Distinct().ToArray();
+
+        var channelId = _tcgChannelSettingsRepository.GetChannelId(settingsKey);
+        return channelId == 0 ? [] : [channelId];
     }
 
     private static string DescribeChannelTargets(IReadOnlyCollection<ulong> channelIds) =>
