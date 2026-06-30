@@ -18,7 +18,11 @@ public partial class BotService
     private static readonly object TcgChannelPostStateLock = new();
     private static string TcgChannelPostStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-channel-post-state.json");
 
-    private static string NormalizeStore(string store) => store.Replace(" ðŸ’¸ Expensive", "", StringComparison.Ordinal).Trim();
+    private static bool IsExpensiveStore(string store) =>
+        store.Contains("Expensive", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeStore(string store) =>
+        Regex.Replace(store, @"\s*[^\p{L}\p{N}]*\s*Expensive$", "", RegexOptions.IgnoreCase).Trim();
 
     private static string NormalizeProductName(string name)
     {
@@ -53,7 +57,7 @@ public partial class BotService
 
     private static bool IsMainResult(Search search, Product product)
     {
-        if (search.Store.Contains("ðŸ’¸", StringComparison.Ordinal)) return false;
+        if (IsExpensiveStore(search.Store)) return false;
         if (LanguageRegex.IsMatch(product.Name)) return false;
         return true;
     }
@@ -996,6 +1000,8 @@ public partial class BotService
         }
     }
 }
+
+
 
 
 
