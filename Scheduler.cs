@@ -15,6 +15,8 @@ public partial class BotService
     private static readonly object TcgNotificationStateLock = new();
     private static readonly JsonSerializerOptions TcgNotificationJsonOptions = new() { WriteIndented = true };
     private static string TcgNotificationStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-notified-products.json");
+    private static readonly object TcgChannelPostStateLock = new();
+    private static string TcgChannelPostStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-channel-post-state.json");
 
     private static string NormalizeStore(string store) => store.Replace(" ðŸ’¸ Expensive", "", StringComparison.Ordinal).Trim();
 
@@ -172,20 +174,74 @@ public partial class BotService
         File.WriteAllText(TcgNotificationStatePath, JsonSerializer.Serialize(raw, TcgNotificationJsonOptions));
     }
 
-    private static bool ProductSetChanged(List<Search> latest, List<TcgResult> previous)
+    private static bool ProductSetChangedForChannel(string settingsKey, ulong channelId, List<Search> latest)
     {
         var latestKeys = latest
             .SelectMany(s => s.Products.Select(p => ProductSnapshotKey(NormalizeStore(s.Store), p.Name, p.Url, p.Price)))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var previousKeys = previous
-            .Select(p => ProductSnapshotKey(p.Store, p.ProductName, p.Url, p.Price))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return !latestKeys.SetEquals(previousKeys);
+        lock (TcgChannelPostStateLock)
+        {
+            var state = LoadTcgChannelPostState();
+            var stateKey = GetTcgChannelPostStateKey(settingsKey, channelId);
+            if (!state.TryGetValue(stateKey, out var previousKeys))
+                return true;
+
+            return !latestKeys.SetEquals(previousKeys);
+        }
     }
 
     private static string ProductSnapshotKey(string store, string productName, string url, string price) =>
         $"{ProductKey(store, productName, url)}||{price.Trim().ToLowerInvariant()}";
+
+    private static void SaveChannelProductSet(string settingsKey, ulong channelId, List<Search> latest)
+    {
+        var latestKeys = latest
+            .SelectMany(s => s.Products.Select(p => ProductSnapshotKey(NormalizeStore(s.Store), p.Name, p.Url, p.Price)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        lock (TcgChannelPostStateLock)
+        {
+            var state = LoadTcgChannelPostState();
+            state[GetTcgChannelPostStateKey(settingsKey, channelId)] = latestKeys;
+            SaveTcgChannelPostState(state);
+        }
+    }
+
+    private static string GetTcgChannelPostStateKey(string settingsKey, ulong channelId) =>
+        $"{settingsKey.Trim().ToLowerInvariant()}::{channelId}";
+
+    private static Dictionary<string, HashSet<string>> LoadTcgChannelPostState()
+    {
+        if (!File.Exists(TcgChannelPostStatePath))
+            return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        var json = File.ReadAllText(TcgChannelPostStatePath);
+        if (string.IsNullOrWhiteSpace(json))
+            return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        var raw = JsonSerializer.Deserialize<Dictionary<string, string[]>>(json)
+            ?? new Dictionary<string, string[]>();
+
+        return raw.ToDictionary(
+            x => x.Key,
+            x => x.Value.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void SaveTcgChannelPostState(Dictionary<string, HashSet<string>> state)
+    {
+        var directory = Path.GetDirectoryName(TcgChannelPostStatePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var raw = state.ToDictionary(
+            x => x.Key,
+            x => x.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+
+        File.WriteAllText(TcgChannelPostStatePath, JsonSerializer.Serialize(raw, TcgNotificationJsonOptions));
+    }
 
     private async Task NotifyNewProducts(string label, string settingsKey, List<(string Store, Product Product)> newProducts)
     {
@@ -258,8 +314,8 @@ public partial class BotService
 
     private List<Search> BuildSharedPreorderChannelResults(string currentResultsKey, ulong channelId, List<Search> currentResults)
     {
-        var sharedChannelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
-        if (channelId == 0 || sharedChannelId == 0 || channelId != sharedChannelId)
+        var sharedChannelIds = GetConfiguredChannelIds("preorder");
+        if (channelId == 0 || sharedChannelIds.Length == 0 || !sharedChannelIds.Contains(channelId))
             return currentResults;
 
         var merged = new List<Search>(currentResults);
@@ -274,12 +330,48 @@ public partial class BotService
         return TcgPreorderClassifier.Merge(merged);
     }
 
-    private ulong GetPreorderChannelId(string settingsKey)
+    private ulong[] GetConfiguredChannelIds(string settingsKey, bool fallbackToSharedPreorder = false)
     {
-        var channelId = _tcgChannelSettingsRepository.GetChannelId(settingsKey);
-        if (channelId == 0 && !settingsKey.Equals("preorder", StringComparison.OrdinalIgnoreCase))
-            channelId = _tcgChannelSettingsRepository.GetChannelId("preorder");
-        return channelId;
+        var channelIds = _tcgChannelSettingsRepository.GetChannelIds(settingsKey);
+        if (channelIds.Length == 0 && fallbackToSharedPreorder && !settingsKey.Equals("preorder", StringComparison.OrdinalIgnoreCase))
+            channelIds = _tcgChannelSettingsRepository.GetChannelIds("preorder");
+
+        return channelIds
+            .Where(id => id != 0)
+            .Distinct()
+            .ToArray();
+    }
+
+    private static string DescribeChannelTargets(IReadOnlyCollection<ulong> channelIds) =>
+        channelIds.Count == 0 ? "disabled" : string.Join(", ", channelIds);
+
+    private async Task PostTcgResultsToChannels(string label, ulong[] channelIds, Func<ulong, List<Search>> resultsFactory, Action<ulong, List<Search>>? onPosted = null)
+    {
+        if (channelIds.Length == 0)
+        {
+            LogWarn($"{label} channel is not configured; skipping Discord post");
+            return;
+        }
+
+        foreach (var channelId in channelIds)
+        {
+            var channelResults = resultsFactory(channelId);
+            if (!channelResults.Any())
+            {
+                LogInfo($"{label} post skipped for channel {channelId}; all products were filtered");
+                continue;
+            }
+
+            try
+            {
+                await _discordClient.PostWebHook(channelId, channelResults);
+                onPosted?.Invoke(channelId, channelResults);
+            }
+            catch (Exception ex)
+            {
+                LogError($"{label} post failed for channel {channelId}: {ex.Message}");
+            }
+        }
     }
 
     private async Task RunPokemonPreorderJob()
@@ -355,24 +447,13 @@ public partial class BotService
             previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
         var preorderDiscordFiltered = ApplyDiscordFilters(ResolvePreorderFilterGame(filterGame), preorderResults);
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderDiscordFiltered, previousPreorderResults);
-        var preorderChannelId = GetPreorderChannelId(settingsKey);
-        var preorderPostResults = BuildSharedPreorderChannelResults(resultsKey, preorderChannelId, preorderDiscordFiltered);
+        var preorderChannelIds = GetConfiguredChannelIds(settingsKey, fallbackToSharedPreorder: true);
 
-        LogInfo($"{label}: {preorderResults.Sum(r => r.Products.Count)} scraped product(s), {preorderDiscordFiltered.Sum(r => r.Products.Count)} after filters, {newPreorderProducts.Count} newly seen");
-
-        try
-        {
-            if (preorderChannelId != 0 && preorderPostResults.Any())
-                await _discordClient.PostWebHook(preorderChannelId, preorderPostResults);
-            else if (preorderChannelId != 0)
-                LogInfo($"{label} post skipped; all products were filtered");
-            else
-                LogWarn($"{label} channel is not configured; skipping Discord post");
-        }
-        catch (Exception ex)
-        {
-            LogError($"{label} post failed for channel {preorderChannelId}: {ex.Message}");
-        }
+        LogInfo($"{label}: {preorderResults.Sum(r => r.Products.Count)} scraped product(s), {preorderDiscordFiltered.Sum(r => r.Products.Count)} after filters, {newPreorderProducts.Count} newly seen, channels: {DescribeChannelTargets(preorderChannelIds)}");
+        await PostTcgResultsToChannels(
+            label,
+            preorderChannelIds,
+            channelId => BuildSharedPreorderChannelResults(resultsKey, channelId, preorderDiscordFiltered));
 
         if (preorderDiscordFiltered.Any())
         {
@@ -391,24 +472,13 @@ public partial class BotService
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderResults, previousPreorderResults);
         var mergedPreorders = TcgPreorderClassifier.Merge(
             preorderResults.Concat(TcgPreorderClassifier.FromTcgResults(previousPreorderResults)));
-        var preorderChannelId = GetPreorderChannelId(settingsKey);
-        var preorderPostResults = BuildSharedPreorderChannelResults(resultsKey, preorderChannelId, mergedPreorders);
+        var preorderChannelIds = GetConfiguredChannelIds(settingsKey, fallbackToSharedPreorder: true);
 
-        LogInfo($"{label}: {preorderResults.Sum(r => r.Products.Count)} diverted product(s), {newPreorderProducts.Count} newly seen, {mergedPreorders.Sum(r => r.Products.Count)} total after merge");
-
-        try
-        {
-            if (preorderChannelId != 0 && preorderPostResults.Any())
-                await _discordClient.PostWebHook(preorderChannelId, preorderPostResults);
-            else if (preorderChannelId != 0)
-                LogInfo($"{label} post skipped; all products were filtered");
-            else
-                LogWarn($"{label} channel is not configured; skipping Discord post");
-        }
-        catch (Exception ex)
-        {
-            LogError($"{label} post failed for channel {preorderChannelId}: {ex.Message}");
-        }
+        LogInfo($"{label}: {preorderResults.Sum(r => r.Products.Count)} diverted product(s), {newPreorderProducts.Count} newly seen, {mergedPreorders.Sum(r => r.Products.Count)} total after merge, channels: {DescribeChannelTargets(preorderChannelIds)}");
+        await PostTcgResultsToChannels(
+            label,
+            preorderChannelIds,
+            channelId => BuildSharedPreorderChannelResults(resultsKey, channelId, mergedPreorders));
 
         if (newPreorderProducts.Any())
             await NotifyNewProducts(label, settingsKey, newPreorderProducts);
@@ -767,24 +837,19 @@ public partial class BotService
                 var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
                 var divertedPreorders = ApplyDiscordFilters("preorder", splitPokemonResults.Preorders);
                 var newPokemonProducts = GetFirstSaleProducts("pokemon", discordFiltered, previousPokemonResults);
-                var pokemonProductsChanged = ProductSetChanged(discordFiltered, previousPokemonResults);
-                var pokemonChannelId = _tcgChannelSettingsRepository.GetChannelId("pokemon");
-                LogInfo($"Pokemon TCG: {filtered.Sum(r => r.Products.Count)} product(s) after price filter, {discordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newPokemonProducts.Count} newly seen");
-                try
-                {
-                    if (pokemonChannelId != 0 && discordFiltered.Any() && pokemonProductsChanged)
-                        await _discordClient.PostWebHook(pokemonChannelId, discordFiltered);
-                    else if (pokemonChannelId != 0 && discordFiltered.Any())
-                        LogInfo("Pokemon TCG Discord post skipped; products unchanged");
-                    else if (pokemonChannelId != 0)
-                        LogInfo("Pokemon TCG post skipped; all products were filtered or diverted");
-                    else
-                        LogWarn("Pokemon TCG channel is not configured; skipping Discord post");
-                }
-                catch (Exception ex)
-                {
-                    LogError($"Pokemon TCG post failed for channel {pokemonChannelId}: {ex.Message}");
-                }
+                var pokemonChannelIds = GetConfiguredChannelIds("pokemon");
+                var pokemonChannelsToPost = pokemonChannelIds
+                    .Where(channelId => ProductSetChangedForChannel("pokemon", channelId, discordFiltered))
+                    .ToArray();
+                LogInfo($"Pokemon TCG: {filtered.Sum(r => r.Products.Count)} product(s) after price filter, {discordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newPokemonProducts.Count} newly seen, channels: {DescribeChannelTargets(pokemonChannelIds)}, changed channels: {DescribeChannelTargets(pokemonChannelsToPost)}");
+                if (pokemonChannelsToPost.Length > 0 && discordFiltered.Any())
+                    await PostTcgResultsToChannels("Pokemon TCG", pokemonChannelsToPost, _ => discordFiltered, (channelId, results) => SaveChannelProductSet("pokemon", channelId, results));
+                else if (pokemonChannelIds.Length > 0 && discordFiltered.Any())
+                    LogInfo("Pokemon TCG Discord post skipped; products unchanged for all configured channels");
+                else if (pokemonChannelIds.Length > 0)
+                    LogInfo("Pokemon TCG post skipped; all products were filtered or diverted");
+                else
+                    LogWarn("Pokemon TCG channel is not configured; skipping Discord post");
                 if (filtered.Any())
                 {
                     if (newPokemonProducts.Any())
@@ -833,24 +898,19 @@ public partial class BotService
                 var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
                 var divertedGundamPreorders = ApplyDiscordFilters("preorder", splitGundamResults.Preorders);
                 var newGundamProducts = GetFirstSaleProducts("gundam", gundamDiscordFiltered, previousGundamResults);
-                var gundamProductsChanged = ProductSetChanged(gundamDiscordFiltered, previousGundamResults);
-                var gundamChannelId = _tcgChannelSettingsRepository.GetChannelId("gundam");
-                LogInfo($"Gundam TCG: {filteredGundamResults.Sum(r => r.Products.Count)} scraped product(s), {gundamDiscordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedGundamPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newGundamProducts.Count} newly seen");
-                try
-                {
-                    if (gundamChannelId != 0 && gundamDiscordFiltered.Any() && gundamProductsChanged)
-                        await _discordClient.PostWebHook(gundamChannelId, gundamDiscordFiltered);
-                    else if (gundamChannelId != 0 && gundamDiscordFiltered.Any())
-                        LogInfo("Gundam TCG Discord post skipped; products unchanged");
-                    else if (gundamChannelId != 0)
-                        LogInfo("Gundam TCG post skipped; all products were filtered or diverted");
-                    else
-                        LogWarn("Gundam TCG channel is not configured; skipping Discord post");
-                }
-                catch (Exception ex)
-                {
-                    LogError($"Gundam TCG post failed for channel {gundamChannelId}: {ex.Message}");
-                }
+                var gundamChannelIds = GetConfiguredChannelIds("gundam");
+                var gundamChannelsToPost = gundamChannelIds
+                    .Where(channelId => ProductSetChangedForChannel("gundam", channelId, gundamDiscordFiltered))
+                    .ToArray();
+                LogInfo($"Gundam TCG: {filteredGundamResults.Sum(r => r.Products.Count)} scraped product(s), {gundamDiscordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedGundamPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newGundamProducts.Count} newly seen, channels: {DescribeChannelTargets(gundamChannelIds)}, changed channels: {DescribeChannelTargets(gundamChannelsToPost)}");
+                if (gundamChannelsToPost.Length > 0 && gundamDiscordFiltered.Any())
+                    await PostTcgResultsToChannels("Gundam TCG", gundamChannelsToPost, _ => gundamDiscordFiltered, (channelId, results) => SaveChannelProductSet("gundam", channelId, results));
+                else if (gundamChannelIds.Length > 0 && gundamDiscordFiltered.Any())
+                    LogInfo("Gundam TCG Discord post skipped; products unchanged for all configured channels");
+                else if (gundamChannelIds.Length > 0)
+                    LogInfo("Gundam TCG post skipped; all products were filtered or diverted");
+                else
+                    LogWarn("Gundam TCG channel is not configured; skipping Discord post");
                 if (filteredGundamResults.Any())
                 {
                     if (newGundamProducts.Any())
