@@ -13,105 +13,96 @@ public partial class BotService
 
     private async Task SendUpcomingRaidReminders(DateTime nowEastern)
     {
-        await RunLoggedAsync(async () =>
+        foreach (var guild in AppSettings.Guilds.Where(g => HasEnabledRaidReminders(g) && Helpers.IsGuildActive(g, nowEastern)))
         {
-            foreach (var guild in AppSettings.Guilds.Where(g => HasEnabledRaidReminders(g) && Helpers.IsGuildActive(g, nowEastern)))
+            try
             {
-                try
-                {
-                    await SendUpcomingRaidReminders(guild, nowEastern);
-                }
-                catch (Exception ex)
-                {
-                    LogException(ex, $"guild={guild.Name}");
-                    LogError($"Raid reminder processing failed for guild {guild.Name}: {ex.Message}");
-                }
+                await SendUpcomingRaidReminders(guild, nowEastern);
             }
-        }, $"nowEastern={nowEastern:O}");
+            catch (Exception ex)
+            {
+                LogException(ex, $"guild={guild.Name}");
+                LogError($"Raid reminder processing failed for guild {guild.Name}: {ex.Message}");
+            }
+        }
     }
 
     private async Task SendUpcomingRaidReminders(GuildSettings guild, DateTime nowEastern)
     {
-        await RunLoggedAsync(async () =>
+        var raids = await GetScheduledRaids(guild);
+        if (raids.Count == 0)
+            return;
+
+        var nowUtc = DateTime.UtcNow;
+        var state = LoadRaidReminderState();
+        var changed = false;
+
+        foreach (var reminder in EnumerateRaidReminderRules(guild))
         {
-            var raids = await GetScheduledRaids(guild);
-            if (raids.Count == 0)
-                return;
-
-            var nowUtc = DateTime.UtcNow;
-            var state = LoadRaidReminderState();
-            var changed = false;
-
-            foreach (var reminder in EnumerateRaidReminderRules(guild))
+            var channelId = ResolveRaidReminderChannelId(guild, reminder);
+            if (channelId == 0)
             {
-                var channelId = ResolveRaidReminderChannelId(guild, reminder);
-                if (channelId == 0)
-                {
-                    LogWarn($"Raid reminder skipped for guild {guild.Name}: no channel is configured for reminder {reminder.Key}");
-                    continue;
-                }
-
-                foreach (var raid in raids.Where(IsSchedulableRaid).OrderBy(r => r.StartsAtUtc))
-                {
-                    var reminderAtUtc = raid.StartsAtUtc.AddMinutes(-reminder.MinutesBefore);
-                    if (nowUtc < reminderAtUtc || nowUtc >= raid.StartsAtUtc)
-                        continue;
-
-                    var reminderKey = BuildRaidReminderKey(guild.Name, raid, reminder);
-                    if (state.SentAtByKey.ContainsKey(reminderKey))
-                        continue;
-
-                    await _discordClient.PostToChannel(channelId, BuildRaidReminderMessage(raid, reminder));
-                    state.SentAtByKey[reminderKey] = nowUtc;
-                    changed = true;
-                    LogInfo($"Posted raid reminder for guild {guild.Name}: {raid.Name} via {raid.Provider} ({reminder.Key})");
-                }
+                LogWarn($"Raid reminder skipped for guild {guild.Name}: no channel is configured for reminder {reminder.Key}");
+                continue;
             }
 
-            if (changed)
-                SaveRaidReminderState(state);
-        }, $"guild={guild.Name}, nowEastern={nowEastern:O}");
+            foreach (var raid in raids.Where(IsSchedulableRaid).OrderBy(r => r.StartsAtUtc))
+            {
+                var reminderAtUtc = raid.StartsAtUtc.AddMinutes(-reminder.MinutesBefore);
+                if (nowUtc < reminderAtUtc || nowUtc >= raid.StartsAtUtc)
+                    continue;
+
+                var reminderKey = BuildRaidReminderKey(guild.Name, raid, reminder);
+                if (state.SentAtByKey.ContainsKey(reminderKey))
+                    continue;
+
+                await _discordClient.PostToChannel(channelId, BuildRaidReminderMessage(raid, reminder));
+                state.SentAtByKey[reminderKey] = nowUtc;
+                changed = true;
+                LogInfo($"Posted raid reminder for guild {guild.Name}: {raid.Name} via {raid.Provider} ({reminder.Key})");
+            }
+        }
+
+        if (changed)
+            SaveRaidReminderState(state);
     }
 
     private async Task<IReadOnlyList<RaidScheduleEvent>> GetScheduledRaids(GuildSettings guild)
     {
-        return await RunLoggedAsync(async () =>
+        var raids = new List<RaidScheduleEvent>();
+        var droptimizer = guild.Droptimizer;
+
+        if (!string.IsNullOrWhiteSpace(droptimizer?.GroupId) && !string.IsNullOrWhiteSpace(droptimizer?.ApiKey))
         {
-            var raids = new List<RaidScheduleEvent>();
-            var droptimizer = guild.Droptimizer;
-
-            if (!string.IsNullOrWhiteSpace(droptimizer?.GroupId) && !string.IsNullOrWhiteSpace(droptimizer?.ApiKey))
+            try
             {
-                try
-                {
-                    raids.AddRange(await _wowUtilsClient.GetRaidSchedule(droptimizer.GroupId, droptimizer.ApiKey));
-                }
-                catch (Exception ex)
-                {
-                    LogException(ex, $"guild={guild.Name}, provider=WoWUtils");
-                    LogWarn($"WoW Utils raid schedule fetch failed for guild {guild.Name}: {ex.Message}");
-                }
+                raids.AddRange(await _wowUtilsClient.GetRaidSchedule(droptimizer.GroupId, droptimizer.ApiKey));
             }
-
-            if (!string.IsNullOrWhiteSpace(droptimizer?.Token))
+            catch (Exception ex)
             {
-                try
-                {
-                    raids.AddRange(await _wowAuditClient.GetRaidSchedule(guild.Name));
-                }
-                catch (Exception ex)
-                {
-                    LogException(ex, $"guild={guild.Name}, provider=WoWAudit");
-                    LogWarn($"WoW Audit raid schedule fetch failed for guild {guild.Name}: {ex.Message}");
-                }
+                LogException(ex, $"guild={guild.Name}, provider=WoWUtils");
+                LogWarn($"WoW Utils raid schedule fetch failed for guild {guild.Name}: {ex.Message}");
             }
+        }
 
-            return raids
-                .Where(raid => raid.StartsAtUtc > DateTime.UtcNow.AddMinutes(-5))
-                .GroupBy(raid => $"{NormalizeRaidName(raid.Name)}|{raid.StartsAtUtc:O}", StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList();
-        }, $"guild={guild.Name}");
+        if (!string.IsNullOrWhiteSpace(droptimizer?.Token))
+        {
+            try
+            {
+                raids.AddRange(await _wowAuditClient.GetRaidSchedule(guild.Name));
+            }
+            catch (Exception ex)
+            {
+                LogException(ex, $"guild={guild.Name}, provider=WoWAudit");
+                LogWarn($"WoW Audit raid schedule fetch failed for guild {guild.Name}: {ex.Message}");
+            }
+        }
+
+        return raids
+            .Where(raid => raid.StartsAtUtc > DateTime.UtcNow.AddMinutes(-5))
+            .GroupBy(raid => $"{NormalizeRaidName(raid.Name)}|{raid.StartsAtUtc:O}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
     }
 
     private static bool IsSchedulableRaid(RaidScheduleEvent raid)
