@@ -970,10 +970,7 @@ public partial class BotService
                         await SendUpcomingRaidReminders(now);
                         _jobRepository.MarkRan(job.Name);
                         break;
-                    case Constants.Jobs.DroptimizerSync:
-                        await RunWoWUtilsToWoWAuditSync();
-                        _jobRepository.MarkRan(job.Name);
-                        break;
+
                 }
             }
 
@@ -999,6 +996,7 @@ public partial class BotService
         }
     }
 }
+
 
 
 
