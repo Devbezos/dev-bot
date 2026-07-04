@@ -13,7 +13,7 @@ public partial class BotService
     private static readonly TimeSpan WoWUtilsRetryDelay = TimeSpan.FromMinutes(60);
     private static string WoWUtilsRetryQueuePath => Path.Combine(AppContext.BaseDirectory, "data", "wowutils-import-queue.json");
 
-    private async Task<(WoWUtilsImportOutcome Outcome, DateTime? RetryAtUtc)> ImportOrQueueWoWUtilsDroptimizer(
+    private async Task<(WoWUtilsImportOutcome Outcome, DateTime? RetryAtUtc, string? UserMessage)> ImportOrQueueWoWUtilsDroptimizer(
         SocketMessage message,
         GuildSettings guild,
         DroptimizerSettings droptimizer,
@@ -29,7 +29,7 @@ public partial class BotService
                 wowUtilsReports);
 
             if (importResult == null || string.IsNullOrWhiteSpace(importResult.CharacterId))
-                return (WoWUtilsImportOutcome.Failed, null);
+                return (WoWUtilsImportOutcome.Failed, null, "WoW Utils returned an empty response for this droptimizer.");
 
             CacheWoWUtilsImportResult(importCache, raidBotsUrl, importResult);
 
@@ -37,7 +37,7 @@ public partial class BotService
                 ? $" Warnings: {string.Join("; ", importResult.Warnings)}"
                 : string.Empty;
             LogInfo($"WoW Utils import successful: {importResult.CharacterId} via {importResult.Source}.{warnings}");
-            return (WoWUtilsImportOutcome.Imported, null);
+            return (WoWUtilsImportOutcome.Imported, null, null);
         }
         catch (HttpRequestException ex) when (IsWoWUtilsRetryable(ex))
         {
@@ -55,14 +55,13 @@ public partial class BotService
             });
 
             LogWarn($"WoW Utils returned {(int?)ex.StatusCode ?? 0} for {raidBotsUrl}; queued retry at {retryAtUtc:O}");
-            return (WoWUtilsImportOutcome.Queued, retryAtUtc);
+            return (WoWUtilsImportOutcome.Queued, retryAtUtc, null);
         }
         catch (WoWUtilsApiException ex)
         {
             var apiMessage = string.IsNullOrWhiteSpace(ex.ApiMessage) ? ex.Message : ex.ApiMessage;
             LogWarn($"WoW Utils import rejected for {raidBotsUrl}: {apiMessage}");
-            await SendDmAsync(message.Author, apiMessage);
-            return (WoWUtilsImportOutcome.Failed, null);
+            return (WoWUtilsImportOutcome.Failed, null, apiMessage);
         }
     }
 

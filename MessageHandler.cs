@@ -78,6 +78,7 @@ public partial class BotService
                 var queuedRetryTimesUtc = new List<DateTime>();
                 var wowUtilsReports = new Dictionary<string, WoWUtilsFetchResponse>(StringComparer.OrdinalIgnoreCase);
                 var wowUtilsImports = new Dictionary<string, WoWUtilsImportResponse>(StringComparer.OrdinalIgnoreCase);
+                var failureMessages = new List<string>();
 
                 foreach (var raidBotsUrl in raidBotsUrls)
                 {
@@ -100,7 +101,7 @@ public partial class BotService
                     if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
                     {
                         var wowUtilsSettings = droptimizer!;
-                        var (outcome, retryAtUtc) = await ImportOrQueueWoWUtilsDroptimizer(
+                        var (outcome, retryAtUtc, userMessage) = await ImportOrQueueWoWUtilsDroptimizer(
                             message,
                             guild,
                             wowUtilsSettings,
@@ -111,6 +112,8 @@ public partial class BotService
                         if (outcome == WoWUtilsImportOutcome.Failed)
                         {
                             reportFailed = true;
+                            if (!string.IsNullOrWhiteSpace(userMessage))
+                                failureMessages.Add($"{raidBotsUrl}: {userMessage}");
                         }
                         else
                         {
@@ -123,7 +126,7 @@ public partial class BotService
 
                     if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
                     {
-                        var (outcome, retryAtUtc) = await ImportOrQueueWoWAuditDroptimizer(
+                        var (outcome, retryAtUtc, userMessage) = await ImportOrQueueWoWAuditDroptimizer(
                             message,
                             guild,
                             reportId,
@@ -132,6 +135,8 @@ public partial class BotService
                         if (outcome == WoWAuditImportOutcome.Failed)
                         {
                             reportFailed = true;
+                            if (!string.IsNullOrWhiteSpace(userMessage))
+                                failureMessages.Add($"{raidBotsUrl}: {userMessage}");
                         }
                         else
                         {
@@ -144,6 +149,8 @@ public partial class BotService
 
                     if (reportFailed && !reportImportedOrQueued)
                     {
+                        if (failureMessages.Count > 0)
+                            await SendDmAsync(message.Author, BuildDroptimizerFailureMessage(failureMessages));
                         await DeleteAsync(message);
                         return;
                     }
@@ -176,6 +183,9 @@ public partial class BotService
                     await ReactAsync(message, new Emoji("\u2705"));
                 }
 
+                if (failureMessages.Count > 0)
+                    await SendDmAsync(message.Author, BuildDroptimizerFailureMessage(failureMessages));
+
                 if (message.Author.Id == 341726443295866893)
                 {
                     var textChannel = message.Channel as ITextChannel;
@@ -195,6 +205,20 @@ public partial class BotService
         }, $"messageId={message.Id}");
     }
 
+    private static string BuildDroptimizerFailureMessage(List<string> failureMessages)
+    {
+        var distinctFailures = failureMessages
+            .Where(message => !string.IsNullOrWhiteSpace(message))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (distinctFailures.Count == 0)
+            return "One or more droptimizer uploads failed.";
+
+        return distinctFailures.Count == 1
+            ? $"Droptimizer upload failed: {distinctFailures[0]}"
+            : $"Some droptimizer uploads failed:\n- {string.Join("\n- ", distinctFailures)}";
+    }
     private async Task ApplyAutoReactionsInOrder(SocketMessage message, IEmote[] emotes)
     {
         await RunLoggedAsync(async () =>

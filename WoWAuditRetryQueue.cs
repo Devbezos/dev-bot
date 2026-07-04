@@ -12,7 +12,7 @@ public partial class BotService
     private static readonly TimeSpan WoWAuditRetryDelay = TimeSpan.FromMinutes(60);
     private static string WoWAuditRetryQueuePath => Path.Combine(AppContext.BaseDirectory, "data", "wowaudit-import-queue.json");
 
-    private async Task<(WoWAuditImportOutcome Outcome, DateTime? RetryAtUtc)> ImportOrQueueWoWAuditDroptimizer(
+    private async Task<(WoWAuditImportOutcome Outcome, DateTime? RetryAtUtc, string? UserMessage)> ImportOrQueueWoWAuditDroptimizer(
         SocketMessage message,
         GuildSettings guild,
         string reportId,
@@ -26,11 +26,10 @@ public partial class BotService
             {
                 var errorMessage = response.Base?.FirstOrDefault() ?? "Unknown WoW Audit error";
                 LogWarn($"WoW Audit rejected droptimizer {raidBotsUrl} for guild {guild.Name}: {errorMessage}");
-                await SendDmAsync(message.Author, $"You did not send a valid droptimizer {errorMessage}");
-                return (WoWAuditImportOutcome.Failed, null);
+                return (WoWAuditImportOutcome.Failed, null, $"You did not send a valid droptimizer {errorMessage}");
             }
 
-            return (WoWAuditImportOutcome.Imported, null);
+            return (WoWAuditImportOutcome.Imported, null, null);
         }
         catch (HttpRequestException ex) when (IsWoWAuditRetryable(ex))
         {
@@ -47,7 +46,7 @@ public partial class BotService
             });
 
             LogWarn($"WoW Audit returned {(int?)ex.StatusCode ?? 0} for {raidBotsUrl}; queued retry at {retryAtUtc:O}");
-            return (WoWAuditImportOutcome.Queued, retryAtUtc);
+            return (WoWAuditImportOutcome.Queued, retryAtUtc, null);
         }
     }
 
