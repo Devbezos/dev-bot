@@ -17,6 +17,8 @@ public partial class BotService
     private static string TcgNotificationStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-notified-products.json");
     private static readonly object TcgChannelPostStateLock = new();
     private static string TcgChannelPostStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-channel-post-state.json");
+    private static readonly object TcgChannelAlertStateLock = new();
+    private static string TcgChannelAlertStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-channel-alert-state.json");
 
     private static bool IsExpensiveStore(string store) =>
         store.Contains("Expensive", StringComparison.OrdinalIgnoreCase);
@@ -247,6 +249,53 @@ public partial class BotService
         File.WriteAllText(TcgChannelPostStatePath, JsonSerializer.Serialize(raw, TcgNotificationJsonOptions));
     }
 
+    private static ulong? GetLatestChannelAlertMessageId(string settingsKey, ulong channelId)
+    {
+        lock (TcgChannelAlertStateLock)
+        {
+            var state = LoadTcgChannelAlertState();
+            return state.TryGetValue(GetTcgChannelPostStateKey(settingsKey, channelId), out var messageId) && messageId != 0
+                ? messageId
+                : null;
+        }
+    }
+
+    private static void SaveLatestChannelAlertMessageId(string settingsKey, ulong channelId, ulong messageId)
+    {
+        lock (TcgChannelAlertStateLock)
+        {
+            var state = LoadTcgChannelAlertState();
+            state[GetTcgChannelPostStateKey(settingsKey, channelId)] = messageId;
+            SaveTcgChannelAlertState(state);
+        }
+    }
+
+    private static Dictionary<string, ulong> LoadTcgChannelAlertState()
+    {
+        if (!File.Exists(TcgChannelAlertStatePath))
+            return new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+
+        var json = File.ReadAllText(TcgChannelAlertStatePath);
+        if (string.IsNullOrWhiteSpace(json))
+            return new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+
+        return JsonSerializer.Deserialize<Dictionary<string, ulong>>(json)
+            ?? new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void SaveTcgChannelAlertState(Dictionary<string, ulong> state)
+    {
+        var directory = Path.GetDirectoryName(TcgChannelAlertStatePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var ordered = state
+            .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+
+        File.WriteAllText(TcgChannelAlertStatePath, JsonSerializer.Serialize(ordered, TcgNotificationJsonOptions));
+    }
+
     private async Task NotifyNewProducts(string label, string settingsKey, List<(string Store, Product Product)> newProducts)
     {
         if (newProducts.Count == 0) return;
@@ -312,6 +361,110 @@ public partial class BotService
 
     private static string BuildNewProductHeader(string title, int part, bool multiPart) =>
         multiPart ? $"{title} (part {part}):" : $"{title}:";
+
+    private static string BuildChannelNewProductMessage(string label, List<(string Store, Product Product)> newProducts)
+    {
+        const int discordMessageLimit = 2000;
+
+        var lines = new List<string>
+        {
+            $"New {label} item{(newProducts.Count == 1 ? "" : "s")} added:"
+        };
+
+        var remaining = discordMessageLimit - lines[0].Length - Environment.NewLine.Length;
+        var includedCount = 0;
+
+        foreach (var item in newProducts)
+        {
+            var line = $"- {item.Store}: [{item.Product.Name}]({item.Product.Url.TrimEnd()}) ({item.Product.Price})";
+            var candidateLength = line.Length + Environment.NewLine.Length;
+            if (includedCount > 0 && remaining - candidateLength < 0)
+                break;
+
+            if (includedCount == 0 && candidateLength > remaining)
+            {
+                var reservedForOverflow = newProducts.Count > 1 ? "\n+ more items".Length : 0;
+                var available = Math.Max(0, remaining - reservedForOverflow - 4);
+                if (available == 0)
+                    break;
+
+                line = line[..Math.Min(line.Length, available)] + "...";
+                candidateLength = line.Length + Environment.NewLine.Length;
+            }
+
+            lines.Add(line);
+            remaining -= candidateLength;
+            includedCount++;
+        }
+
+        var overflowCount = newProducts.Count - includedCount;
+        if (overflowCount > 0)
+        {
+            var overflowLine = $"+ {overflowCount} more item{(overflowCount == 1 ? "" : "s")}";
+            if (overflowLine.Length + Environment.NewLine.Length <= remaining)
+                lines.Add(overflowLine);
+            else if (lines.Count > 1)
+                lines[^1] = lines[^1].TrimEnd('.', ' ') + "...";
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private async Task PostLatestNewProductMessage(string label, string settingsKey, ulong channelId, List<(string Store, Product Product)> newProducts)
+    {
+        if (newProducts.Count == 0) return;
+
+        var content = BuildChannelNewProductMessage(label, newProducts);
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+
+        try
+        {
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] Replace latest new-product alert in channel {channelId}: {content}");
+                return;
+            }
+
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel;
+            if (channel == null)
+            {
+                LogWarn($"{label} new-item alert skipped; channel {channelId} not found");
+                return;
+            }
+
+            var previousMessageId = GetLatestChannelAlertMessageId(settingsKey, channelId);
+            if (previousMessageId.HasValue)
+            {
+                try
+                {
+                    var previousMessage = await channel.GetMessageAsync(previousMessageId.Value) as IUserMessage;
+                    if (previousMessage != null)
+                        await previousMessage.DeleteAsync();
+                }
+                catch (Exception ex)
+                {
+                    LogWarn($"{label} previous new-item alert delete failed for channel {channelId}, message {previousMessageId.Value}: {ex.Message}");
+                }
+            }
+
+            var posted = await channel.SendMessageAsync(content);
+            SaveLatestChannelAlertMessageId(settingsKey, channelId, posted.Id);
+        }
+        catch (Exception ex)
+        {
+            LogError($"{label} new-item alert post failed for channel {channelId}: {ex.Message}");
+        }
+    }
+
+    private async Task PostLatestNewProductMessages(string label, string settingsKey, ulong[] channelIds, List<(string Store, Product Product)> newProducts)
+    {
+        if (newProducts.Count == 0 || channelIds.Length == 0)
+            return;
+
+        foreach (var channelId in channelIds.Distinct())
+            await PostLatestNewProductMessage(label, settingsKey, channelId, newProducts);
+    }
 
     private static string ResolvePreorderFilterGame(string filterGame) =>
         string.IsNullOrWhiteSpace(filterGame) ? "preorder" : filterGame;
@@ -471,6 +624,8 @@ public partial class BotService
 
         if (preorderDiscordFiltered.Any())
         {
+            if (newPreorderProducts.Any())
+                await PostLatestNewProductMessages(label, settingsKey, preorderChannelIds, newPreorderProducts);
             if (newPreorderProducts.Any())
                 await NotifyNewProducts(label, settingsKey, newPreorderProducts);
             _tcgRepository.SaveResults(DateTime.UtcNow, preorderDiscordFiltered, resultsKey);
@@ -867,6 +1022,8 @@ public partial class BotService
                 if (filtered.Any())
                 {
                     if (newPokemonProducts.Any())
+                        await PostLatestNewProductMessages("Pokemon TCG", "pokemon", pokemonChannelIds, newPokemonProducts);
+                    if (newPokemonProducts.Any())
                         await NotifyNewProducts("Pokemon TCG", "pokemon", newPokemonProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, splitPokemonResults.Regular, "pokemon");
                     LogInfo($"Pokemon TCG: saved {splitPokemonResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
@@ -928,6 +1085,8 @@ public partial class BotService
                     LogWarn("Gundam TCG channel is not configured; skipping Discord post");
                 if (filteredGundamResults.Any())
                 {
+                    if (newGundamProducts.Any())
+                        await PostLatestNewProductMessages("Gundam TCG", "gundam", gundamChannelIds, newGundamProducts);
                     if (newGundamProducts.Any())
                         await NotifyNewProducts("Gundam TCG", "gundam", newGundamProducts);
                     _tcgRepository.SaveResults(DateTime.UtcNow, splitGundamResults.Regular, "gundam");

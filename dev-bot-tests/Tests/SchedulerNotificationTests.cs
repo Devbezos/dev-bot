@@ -88,6 +88,36 @@ public class SchedulerNotificationTests : IDisposable
         Assert.Equal("Fitness weekly failed for `test-user`: 403 forbidden", message);
     }
 
+    [Fact]
+    public void BuildChannelNewProductMessage_IncludesProducts()
+    {
+        var message = InvokeBuildChannelNewProductMessage(
+            "Pokemon TCG",
+            [
+                ("Atlas", new Product("Chaos Rising Booster Box", "$299.99", "https://example.com/chaos-rising")),
+                ("401Games", new Product("Perfect Order Booster Box", "$279.99", "https://example.com/perfect-order"))
+            ]);
+
+        Assert.Contains("New Pokemon TCG items added:", message);
+        Assert.Contains("Chaos Rising Booster Box", message);
+        Assert.Contains("https://example.com/chaos-rising", message);
+        Assert.Contains("Perfect Order Booster Box", message);
+        Assert.Contains("https://example.com/perfect-order", message);
+    }
+
+    [Fact]
+    public void BuildChannelNewProductMessage_WhenTooLong_AddsOverflowSummary()
+    {
+        var products = Enumerable.Range(1, 40)
+            .Select(i => ($"Store{i}", new Product(new string('A', 120), "$1.00", $"https://example.com/{i}")))
+            .ToList();
+
+        var message = InvokeBuildChannelNewProductMessage("Pokemon TCG", products);
+
+        Assert.True(message.Length <= 2000);
+        Assert.Contains("more item", message);
+    }
+
     public void Dispose() => DeleteStateFile();
 
     private static IReadOnlyCollection<object> InvokeGetFirstSaleProducts(
@@ -127,6 +157,16 @@ public class SchedulerNotificationTests : IDisposable
         return (string)method!.Invoke(null, [cadence, username, errorMessage])!;
     }
 
+    private static string InvokeBuildChannelNewProductMessage(
+        string label,
+        List<(string Store, Product Product)> newProducts)
+    {
+        var method = typeof(BotService).GetMethod(
+            "BuildChannelNewProductMessage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        return (string)method!.Invoke(null, [label, newProducts])!;
+    }
     private void DeleteStateFile()
     {
         if (File.Exists(_statePath))
