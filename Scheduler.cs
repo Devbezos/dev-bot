@@ -1134,6 +1134,10 @@ public partial class BotService
                         await SendUpcomingRaidReminders(now);
                         _jobRepository.MarkRan(job.Name);
                         break;
+                    case Constants.Jobs.WoWUtilsRosterSync:
+                        await SyncWoWUtilsRosterToWoWAudit();
+                        _jobRepository.MarkRan(job.Name);
+                        break;
 
                 }
             }
