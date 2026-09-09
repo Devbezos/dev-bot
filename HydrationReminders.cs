@@ -2,7 +2,8 @@ using DevClient.Data;
 
 public partial class BotService
 {
-    private static readonly string[] HydrationReminderMessages =
+    // Used whenever no custom messages have been set from the Fitness page.
+    private static readonly string[] DefaultHydrationReminderMessages =
     [
         "Hey! Quick reminder to drink some water. 💧",
         "Have you eaten anything in a while? Grab a snack or a meal. 🍽️",
@@ -36,7 +37,8 @@ public partial class BotService
             (DateTime.UtcNow - schedule.LastSentAtUtc.Value).TotalMinutes < schedule.IntervalMinutes)
             return;
 
-        var message = HydrationReminderMessages[Random.Shared.Next(HydrationReminderMessages.Length)];
+        var messages = schedule.Messages.Length > 0 ? schedule.Messages : DefaultHydrationReminderMessages;
+        var message = messages[Random.Shared.Next(messages.Length)];
 
         if (AppSettings.DryRun)
         {
