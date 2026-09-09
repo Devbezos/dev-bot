@@ -1138,12 +1138,17 @@ public partial class BotService
                         await SyncWoWUtilsRosterToWoWAudit();
                         _jobRepository.MarkRan(job.Name);
                         break;
-                    case Constants.Jobs.HydrationReminder:
-                        await SendHydrationReminder();
-                        _jobRepository.MarkRan(job.Name);
-                        break;
-
                 }
+            }
+
+            try
+            {
+                await SendHydrationReminderIfDue(now);
+            }
+            catch (Exception ex)
+            {
+                LogException(ex);
+                LogError($"Hydration reminder check failed: {ex.Message}");
             }
 
             if (globalEnabled.GetValueOrDefault(Constants.Jobs.KeyAudit, true)
