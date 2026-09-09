@@ -1138,6 +1138,10 @@ public partial class BotService
                         await SyncWoWUtilsRosterToWoWAudit();
                         _jobRepository.MarkRan(job.Name);
                         break;
+                    case Constants.Jobs.HydrationReminder:
+                        await SendHydrationReminder();
+                        _jobRepository.MarkRan(job.Name);
+                        break;
 
                 }
             }
