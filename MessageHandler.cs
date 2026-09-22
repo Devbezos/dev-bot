@@ -88,9 +88,9 @@ public partial class BotService
                     var reportFailed = false;
 
                     var droptimizer = guild.Droptimizer;
-                    var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer);
+                    var uploadTarget = ResolveDroptimizerUploadTarget(droptimizer, guild.RosterSync);
 
-                    if (!uploadTarget.HasValue)
+                    if (uploadTarget == DroptimizerUploadTarget.None)
                     {
                         LogWarn($"Droptimizer configuration missing for guild {guild.Name}; rejecting droptimizer {raidBotsUrl}");
                         await SendDmAsync(message.Author, "This guild needs either WoW Utils or WoW Audit droptimizer credentials configured. Please ask an admin to check the bot settings.");
@@ -98,9 +98,10 @@ public partial class BotService
                         return;
                     }
 
-                    if (uploadTarget == DroptimizerUploadTarget.WoWUtils)
+                    if (uploadTarget.HasFlag(DroptimizerUploadTarget.WoWUtils))
                     {
-                        var wowUtilsSettings = droptimizer!;
+                        var (groupId, apiKey) = ResolveWoWUtilsCredentials(guild);
+                        var wowUtilsSettings = new DroptimizerSettings { GroupId = groupId, ApiKey = apiKey };
                         var (outcome, retryAtUtc, userMessage) = await ImportOrQueueWoWUtilsDroptimizer(
                             message,
                             guild,
@@ -124,7 +125,7 @@ public partial class BotService
                             queuedRetryTimesUtc.Add(retryAtUtc.Value);
                     }
 
-                    if (uploadTarget == DroptimizerUploadTarget.WoWAudit)
+                    if (uploadTarget.HasFlag(DroptimizerUploadTarget.WoWAudit))
                     {
                         var (outcome, retryAtUtc, userMessage) = await ImportOrQueueWoWAuditDroptimizer(
                             message,

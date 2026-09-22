@@ -8,10 +8,12 @@ using System.Text.RegularExpressions;
 
 public partial class BotService
 {
+    [Flags]
     private enum DroptimizerUploadTarget
     {
-        WoWUtils,
-        WoWAudit
+        None = 0,
+        WoWUtils = 1 << 0,
+        WoWAudit = 1 << 1
     }
 
     private sealed record RaidBotsCharacterIdentity(string Name, string Realm, string? Spec, string? Role);
@@ -23,15 +25,31 @@ public partial class BotService
     private static bool HasWoWAuditConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.Token);
 
-    private static DroptimizerUploadTarget? ResolveDroptimizerUploadTarget(DroptimizerSettings? droptimizer)
+    // When roster sync is enabled, its WoWAudit/WoWUtils credentials (separate from
+    // DroptimizerSettings, see RosterSyncSettings) take priority so droptimizers are
+    // imported to both sources without requiring the guild to duplicate credentials.
+    private static (string? GroupId, string? ApiKey) ResolveWoWUtilsCredentials(GuildSettings guild) =>
+        HasRosterSyncConfig(guild.RosterSync)
+            ? (guild.RosterSync!.WoWUtilsGroupId, guild.RosterSync.WoWUtilsApiKey)
+            : (guild.Droptimizer?.GroupId, guild.Droptimizer?.ApiKey);
+
+    private static string? ResolveWoWAuditToken(GuildSettings guild) =>
+        HasRosterSyncConfig(guild.RosterSync)
+            ? guild.RosterSync!.WoWAuditToken
+            : guild.Droptimizer?.Token;
+
+    private static DroptimizerUploadTarget ResolveDroptimizerUploadTarget(DroptimizerSettings? droptimizer, RosterSyncSettings? rosterSync)
     {
+        if (HasRosterSyncConfig(rosterSync))
+            return DroptimizerUploadTarget.WoWUtils | DroptimizerUploadTarget.WoWAudit;
+
         var source = droptimizer?.Source?.Trim().ToLowerInvariant();
 
         if (source == "wowutils")
-            return HasWoWUtilsConfig(droptimizer) ? DroptimizerUploadTarget.WoWUtils : null;
+            return HasWoWUtilsConfig(droptimizer) ? DroptimizerUploadTarget.WoWUtils : DroptimizerUploadTarget.None;
 
         if (source == "wowaudit")
-            return HasWoWAuditConfig(droptimizer) ? DroptimizerUploadTarget.WoWAudit : null;
+            return HasWoWAuditConfig(droptimizer) ? DroptimizerUploadTarget.WoWAudit : DroptimizerUploadTarget.None;
 
         if (HasWoWUtilsConfig(droptimizer))
             return DroptimizerUploadTarget.WoWUtils;
@@ -39,7 +57,7 @@ public partial class BotService
         if (HasWoWAuditConfig(droptimizer))
             return DroptimizerUploadTarget.WoWAudit;
 
-        return null;
+        return DroptimizerUploadTarget.None;
     }
 
     private async Task<WoWUtilsImportResponse> ImportDroptimizerToWoWUtils(
@@ -60,9 +78,8 @@ public partial class BotService
 
     private async Task<WoWAuditWishlistResponse> UpdateWoWAuditWishlist(string reportId, string guildName)
     {
-        var token = AppSettings.Guilds
-            .First(g => g.Name == guildName.ToUpper())
-            .Droptimizer?.Token;
+        var guild = AppSettings.Guilds.First(g => g.Name == guildName.ToUpper());
+        var token = ResolveWoWAuditToken(guild);
 
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException($"WoW Audit token is missing for guild {guildName}");
