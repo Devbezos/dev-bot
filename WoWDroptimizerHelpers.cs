@@ -108,7 +108,7 @@ public partial class BotService
             $"WoW Audit wishlist update failed ({(int)response.StatusCode}): {responseBody}");
     }
 
-    private async Task<bool> TryTrackWoWAuditCharacterForImport(string guildName, string reportId)
+    private async Task<(bool Tracked, string? FailureReason)> TryTrackWoWAuditCharacterForImport(string guildName, string reportId)
     {
         RaidBotsCharacterIdentity character;
         try
@@ -117,13 +117,14 @@ public partial class BotService
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            LogWarn($"WoW Audit roster recovery could not fetch Raidbots input for report {reportId}; droptimizer input was not found");
-            return false;
+            var reason = $"could not fetch Raidbots input for report {reportId}; it was not found";
+            LogWarn($"WoW Audit roster recovery {reason}");
+            return (false, reason);
         }
         catch (Exception ex)
         {
             LogWarn($"WoW Audit roster recovery failed to read Raidbots input for report {reportId}: {ex.Message}");
-            return false;
+            return (false, ex.Message);
         }
 
         try
@@ -142,11 +143,11 @@ public partial class BotService
         catch (Exception ex)
         {
             LogWarn($"WoW Audit roster recovery failed to track {character.Name}-{character.Realm} for guild {guildName}: {ex.Message}");
-            return false;
+            return (false, ex.Message);
         }
 
         LogInfo($"WoW Audit roster recovery tracked {character.Name}-{character.Realm} for guild {guildName}");
-        return true;
+        return (true, null);
     }
 
     private async Task<RaidBotsCharacterIdentity> GetRaidBotsCharacterIdentity(string reportId)

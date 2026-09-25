@@ -24,7 +24,7 @@ public partial class BotService
 
             if (!string.Equals(response.Created, "true", StringComparison.OrdinalIgnoreCase))
             {
-                var errorMessage = response.Base?.FirstOrDefault() ?? "Unknown WoW Audit error";
+                var errorMessage = response.Base is { Length: > 0 } ? string.Join(" ", response.Base) : "Unknown WoW Audit error";
                 LogWarn($"WoW Audit rejected droptimizer {raidBotsUrl} for guild {guild.Name}: {errorMessage}");
                 return (WoWAuditImportOutcome.Failed, null, $"You did not send a valid droptimizer {errorMessage}");
             }
@@ -48,6 +48,11 @@ public partial class BotService
             LogWarn($"WoW Audit returned {(int?)ex.StatusCode ?? 0} for {raidBotsUrl}; queued retry at {retryAtUtc:O}");
             return (WoWAuditImportOutcome.Queued, retryAtUtc, null);
         }
+        catch (Exception ex)
+        {
+            LogError($"WoW Audit import failed unexpectedly for {raidBotsUrl}: {ex}");
+            return (WoWAuditImportOutcome.Failed, null, $"WoW Audit import failed: {ex.Message}");
+        }
     }
 
     private async Task<WoWAuditWishlistResponse> ImportWoWAuditDroptimizer(string guildName, string reportId, bool allowRosterRecovery = true)
@@ -61,9 +66,13 @@ public partial class BotService
             return response;
 
         LogInfo($"WoW Audit import reported a missing roster character for report {reportId}; attempting roster recovery");
-        var tracked = await TryTrackWoWAuditCharacterForImport(guildName, reportId);
+        var (tracked, trackFailureReason) = await TryTrackWoWAuditCharacterForImport(guildName, reportId);
         if (!tracked)
+        {
+            if (!string.IsNullOrWhiteSpace(trackFailureReason))
+                response.Base = [.. response.Base ?? [], $"Automatic roster tracking also failed: {trackFailureReason}"];
             return response;
+        }
 
         LogInfo($"WoW Audit roster recovery succeeded for report {reportId}; retrying wishlist import");
         return await ImportWoWAuditDroptimizer(guildName, reportId, allowRosterRecovery: false);
