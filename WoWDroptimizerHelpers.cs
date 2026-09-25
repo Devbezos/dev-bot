@@ -162,10 +162,12 @@ public partial class BotService
         response.EnsureSuccessStatusCode();
         var simcText = await response.Content.ReadAsStringAsync();
 
-        var name = MatchValue(simcText, "^[a-z_]+=\"([^\"]+)\"");
+        var classMatch = Regex.Match(simcText, "^([a-z_]+)=\"([^\"]+)\"", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+        var wowClass = classMatch.Success ? classMatch.Groups[1].Value : null;
+        var name = classMatch.Success ? classMatch.Groups[2].Value.Trim() : null;
         var realm = MatchValue(simcText, "^server=(\\S+)");
         var spec = MatchValue(simcText, "^spec=(\\S+)");
-        var role = NormalizeWoWAuditRole(MatchValue(simcText, "^role=(\\S+)"));
+        var role = ResolveWoWAuditRole(wowClass, spec, MatchValue(simcText, "^role=(\\S+)"));
 
         if (string.IsNullOrWhiteSpace(name))
             throw new InvalidOperationException($"Could not determine character name from Raidbots input for {reportId}");
@@ -199,6 +201,77 @@ public partial class BotService
             _ => role
         };
     }
+
+    // SimC's role=attack/spell/hybrid/tank/heal describes damage type, not WoW Audit's
+    // Tank/Heal/Melee/Ranged positioning - e.g. Marksmanship Hunter and Enhancement Shaman
+    // are both role=attack in SimC despite being Ranged and Melee respectively. WoW Audit
+    // rejects anything outside its four values, so classify from class+spec instead.
+    private static readonly Dictionary<string, string> WoWAuditSpecRoles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["deathknight|blood"] = "Tank",
+        ["deathknight|frost"] = "Melee",
+        ["deathknight|unholy"] = "Melee",
+
+        ["demonhunter|havoc"] = "Melee",
+        ["demonhunter|vengeance"] = "Tank",
+
+        ["druid|balance"] = "Ranged",
+        ["druid|feral"] = "Melee",
+        ["druid|guardian"] = "Tank",
+        ["druid|restoration"] = "Heal",
+
+        ["evoker|devastation"] = "Ranged",
+        ["evoker|preservation"] = "Heal",
+        ["evoker|augmentation"] = "Ranged",
+
+        ["hunter|beastmastery"] = "Ranged",
+        ["hunter|marksmanship"] = "Ranged",
+        ["hunter|survival"] = "Melee",
+
+        ["mage|arcane"] = "Ranged",
+        ["mage|fire"] = "Ranged",
+        ["mage|frost"] = "Ranged",
+
+        ["monk|brewmaster"] = "Tank",
+        ["monk|windwalker"] = "Melee",
+        ["monk|mistweaver"] = "Heal",
+
+        ["paladin|holy"] = "Heal",
+        ["paladin|protection"] = "Tank",
+        ["paladin|retribution"] = "Melee",
+
+        ["priest|discipline"] = "Heal",
+        ["priest|holy"] = "Heal",
+        ["priest|shadow"] = "Ranged",
+
+        ["rogue|assassination"] = "Melee",
+        ["rogue|outlaw"] = "Melee",
+        ["rogue|subtlety"] = "Melee",
+
+        ["shaman|elemental"] = "Ranged",
+        ["shaman|enhancement"] = "Melee",
+        ["shaman|restoration"] = "Heal",
+
+        ["warlock|affliction"] = "Ranged",
+        ["warlock|demonology"] = "Ranged",
+        ["warlock|destruction"] = "Ranged",
+
+        ["warrior|arms"] = "Melee",
+        ["warrior|fury"] = "Melee",
+        ["warrior|protection"] = "Tank",
+    };
+
+    private static string? ResolveWoWAuditRole(string? wowClass, string? spec, string? simcRole)
+    {
+        var key = $"{NormalizeSpecToken(wowClass)}|{NormalizeSpecToken(spec)}";
+        if (WoWAuditSpecRoles.TryGetValue(key, out var resolvedRole))
+            return resolvedRole;
+
+        return NormalizeWoWAuditRole(simcRole);
+    }
+
+    private static string NormalizeSpecToken(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : Regex.Replace(value, "[^a-z0-9]", "", RegexOptions.IgnoreCase).ToLowerInvariant();
 
     private static bool IsMissingWoWAuditRosterError(string? errorMessage) =>
         !string.IsNullOrWhiteSpace(errorMessage)
