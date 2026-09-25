@@ -79,6 +79,7 @@ public partial class BotService
                 var wowUtilsReports = new Dictionary<string, WoWUtilsFetchResponse>(StringComparer.OrdinalIgnoreCase);
                 var wowUtilsImports = new Dictionary<string, WoWUtilsImportResponse>(StringComparer.OrdinalIgnoreCase);
                 var failureMessages = new List<string>();
+                var warningMessages = new List<string>();
 
                 foreach (var raidBotsUrl in raidBotsUrls)
                 {
@@ -102,7 +103,7 @@ public partial class BotService
                     {
                         var (groupId, apiKey) = ResolveWoWUtilsCredentials(guild);
                         var wowUtilsSettings = new DroptimizerSettings { GroupId = groupId, ApiKey = apiKey };
-                        var (outcome, retryAtUtc, userMessage) = await ImportOrQueueWoWUtilsDroptimizer(
+                        var (outcome, retryAtUtc, userMessage, warnings) = await ImportOrQueueWoWUtilsDroptimizer(
                             message,
                             guild,
                             wowUtilsSettings,
@@ -119,6 +120,8 @@ public partial class BotService
                         else
                         {
                             reportImportedOrQueued = true;
+                            if (!string.IsNullOrWhiteSpace(warnings))
+                                warningMessages.Add($"{raidBotsUrl}: {warnings}");
                         }
 
                         if (outcome == WoWUtilsImportOutcome.Queued && retryAtUtc.HasValue)
@@ -187,6 +190,9 @@ public partial class BotService
                 if (failureMessages.Count > 0)
                     await SendDmAsync(message.Author, BuildDroptimizerFailureMessage(failureMessages));
 
+                if (warningMessages.Count > 0)
+                    await SendDmAsync(message.Author, BuildDroptimizerWarningMessage(warningMessages));
+
                 if (message.Author.Id == 341726443295866893)
                 {
                     var textChannel = message.Channel as ITextChannel;
@@ -220,6 +226,22 @@ public partial class BotService
             ? $"Droptimizer upload failed: {distinctFailures[0]}"
             : $"Some droptimizer uploads failed:\n- {string.Join("\n- ", distinctFailures)}";
     }
+
+    private static string BuildDroptimizerWarningMessage(List<string> warningMessages)
+    {
+        var distinctWarnings = warningMessages
+            .Where(message => !string.IsNullOrWhiteSpace(message))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (distinctWarnings.Count == 0)
+            return "Your droptimizer was imported, but WoW Utils flagged a warning.";
+
+        return distinctWarnings.Count == 1
+            ? $"Your droptimizer was imported, but WoW Utils flagged a warning: {distinctWarnings[0]}"
+            : $"Your droptimizer was imported, but WoW Utils flagged warnings:\n- {string.Join("\n- ", distinctWarnings)}";
+    }
+
     private async Task ApplyAutoReactionsInOrder(SocketMessage message, IEmote[] emotes)
     {
         await RunLoggedAsync(async () =>
