@@ -126,16 +126,24 @@ public partial class BotService
             return false;
         }
 
-        await _wowAuditClient.TrackCharacter(guildName, new WoWAuditTrackCharacterRequest
+        try
         {
-            Character = new WoWAuditTrackCharacterPayload
+            await _wowAuditClient.TrackCharacter(guildName, new WoWAuditTrackCharacterRequest
             {
-                Name = character.Name,
-                Realm = character.Realm,
-                Spec = character.Spec,
-                Role = character.Role
-            }
-        });
+                Character = new WoWAuditTrackCharacterPayload
+                {
+                    Name = character.Name,
+                    Realm = character.Realm,
+                    Spec = character.Spec,
+                    Role = character.Role
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"WoW Audit roster recovery failed to track {character.Name}-{character.Realm} for guild {guildName}: {ex.Message}");
+            return false;
+        }
 
         LogInfo($"WoW Audit roster recovery tracked {character.Name}-{character.Realm} for guild {guildName}");
         return true;
