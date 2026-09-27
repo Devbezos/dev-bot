@@ -26,7 +26,7 @@ public partial class BotService
             {
                 var errorMessage = response.Base is { Length: > 0 } ? string.Join(" ", response.Base) : "Unknown WoW Audit error";
                 LogWarn($"WoW Audit rejected droptimizer {raidBotsUrl} for guild {guild.Name}: {errorMessage}");
-                return (WoWAuditImportOutcome.Failed, null, $"You did not send a valid droptimizer {errorMessage}");
+                return (WoWAuditImportOutcome.Failed, null, $"WoW Audit rejected this droptimizer: {errorMessage}");
             }
 
             return (WoWAuditImportOutcome.Imported, null, null);

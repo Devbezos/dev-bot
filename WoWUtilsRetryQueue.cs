@@ -61,7 +61,7 @@ public partial class BotService
         {
             var apiMessage = string.IsNullOrWhiteSpace(ex.ApiMessage) ? ex.Message : ex.ApiMessage;
             LogWarn($"WoW Utils import rejected for {raidBotsUrl}: {apiMessage}");
-            return (WoWUtilsImportOutcome.Failed, null, apiMessage, null);
+            return (WoWUtilsImportOutcome.Failed, null, $"WoW Utils rejected this droptimizer: {apiMessage}", null);
         }
     }
 
