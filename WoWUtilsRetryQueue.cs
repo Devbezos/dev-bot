@@ -33,8 +33,11 @@ public partial class BotService
 
             CacheWoWUtilsImportResult(importCache, raidBotsUrl, importResult);
 
-            var warningsText = importResult.Warnings is { Length: > 0 }
-                ? string.Join(" ", importResult.Warnings)
+            var warnings = (importResult.Warnings ?? [])
+                .Where(w => !Constants.WoW.WoWUtils.IgnoredWarnings.Any(ignored => w.Contains(ignored, StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            var warningsText = warnings.Length > 0
+                ? string.Join(" ", warnings)
                 : null;
             LogInfo($"WoW Utils import successful: {importResult.CharacterId} via {importResult.Source}.{(warningsText != null ? $" Warnings: {warningsText}" : string.Empty)}");
             return (WoWUtilsImportOutcome.Imported, null, null, warningsText);
