@@ -60,6 +60,38 @@ public class WoWRosterSyncTests
     }
 
     [Fact]
+    public void FindStaleWoWAuditCharacters_WhenTrackedCharacterNotOnRoster_ReturnsCharacter()
+    {
+        var stale = FindStale(
+            roster: [RosterMember("Alice", "Area52")],
+            tracked: [Character("Alice", "Area52"), Character("Bob", "Area52")]);
+
+        var character = Assert.Single(stale);
+        Assert.Equal("Bob", character.Name);
+    }
+
+    [Fact]
+    public void FindStaleWoWAuditCharacters_MatchIsCaseInsensitiveAndTrimmed()
+    {
+        var stale = FindStale(
+            roster: [RosterMember(" alice ", " AREA52 ")],
+            tracked: [Character("Alice", "Area52")]);
+
+        Assert.Empty(stale);
+    }
+
+    [Fact]
+    public void FindStaleWoWAuditCharacters_SameNameOnDifferentRealm_IsStale()
+    {
+        var stale = FindStale(
+            roster: [RosterMember("Alice", "Area52")],
+            tracked: [Character("Alice", "Illidan")]);
+
+        var character = Assert.Single(stale);
+        Assert.Equal("Illidan", character.Realm);
+    }
+
+    [Fact]
     public void HasRosterSyncConfig_RequiresEnabledAndAllThreeCredentials()
     {
         Assert.False(HasRosterSyncConfig(null));
@@ -87,6 +119,15 @@ public class WoWRosterSyncTests
             BindingFlags.NonPublic | BindingFlags.Static);
 
         return (List<WoWUtilsRosterMember>)method!.Invoke(null, [roster, tracked])!;
+    }
+
+    private static List<WoWAuditCharacter> FindStale(List<WoWUtilsRosterMember> roster, List<WoWAuditCharacter> tracked)
+    {
+        var method = typeof(BotService).GetMethod(
+            "FindStaleWoWAuditCharacters",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        return (List<WoWAuditCharacter>)method!.Invoke(null, [roster, tracked])!;
     }
 
     private static bool HasRosterSyncConfig(RosterSyncSettings? settings)
