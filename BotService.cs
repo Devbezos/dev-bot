@@ -40,6 +40,7 @@ public partial class BotService : BackgroundService
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
     private readonly IHydrationReminderSettingsRepository _hydrationReminderSettingsRepository;
+    private readonly IRxpGuidesWatchRepository _rxpGuidesWatchRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
     private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
@@ -71,6 +72,7 @@ public partial class BotService : BackgroundService
         ITcgMessageStateRepository tcgMessageStateRepository,
         IPokemonCenterSecurityStateRepository pokemonCenterSecurityStateRepository,
         IHydrationReminderSettingsRepository hydrationReminderSettingsRepository,
+        IRxpGuidesWatchRepository rxpGuidesWatchRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -94,6 +96,7 @@ public partial class BotService : BackgroundService
         _tcgMessageStateRepository = tcgMessageStateRepository;
         _pokemonCenterSecurityStateRepository = pokemonCenterSecurityStateRepository;
         _hydrationReminderSettingsRepository = hydrationReminderSettingsRepository;
+        _rxpGuidesWatchRepository = rxpGuidesWatchRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -114,6 +117,7 @@ public partial class BotService : BackgroundService
         _tcgMessageStateRepository.EnsureTable();
         _pokemonCenterSecurityStateRepository.EnsureTable();
         _hydrationReminderSettingsRepository.EnsureTable();
+        _rxpGuidesWatchRepository.EnsureTable(AppSettings.RxpGuidesWatchThreadUrl);
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _autoReactionRules = _autoReactionRepository.GetAll();

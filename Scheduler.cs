@@ -901,6 +901,21 @@ public partial class BotService
                 _jobRepository.MarkRan(Constants.Jobs.PokemonCenterSecurity);
             }
 
+            var rxpGuidesWatchJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.RxpGuidesWatch);
+            if (rxpGuidesWatchJob != null && _jobRepository.ShouldRunToday(rxpGuidesWatchJob, now, eastern))
+            {
+                try
+                {
+                    await RunRxpGuidesWatch(cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    LogException(ex);
+                    LogError($"RXPGuides watch failed: {ex.Message}");
+                }
+                _jobRepository.MarkRan(Constants.Jobs.RxpGuidesWatch);
+            }
+
             var fitnessUsers = _fitnessRepository.GetUsers();
             var credsByUsername = _fitnessRepository.GetGoogleHealthSettings()
                 .Where(u => !string.IsNullOrEmpty(u.RefreshToken))
@@ -1116,6 +1131,7 @@ public partial class BotService
                 j.Name != Constants.Jobs.FitnessWeekly &&
                 j.Name != Constants.Jobs.ServerAvailability &&
                 j.Name != Constants.Jobs.PokemonCenterSecurity &&
+                j.Name != Constants.Jobs.RxpGuidesWatch &&
                 j.Name != Constants.Jobs.Tcg &&
                 j.Name != Constants.Jobs.PokemonTcg &&
                 j.Name != Constants.Jobs.GundamTcg &&
