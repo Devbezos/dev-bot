@@ -1157,15 +1157,6 @@ public partial class BotService
                 }
             }
 
-            try
-            {
-                await SendHydrationReminderIfDue(now);
-            }
-            catch (Exception ex)
-            {
-                LogException(ex);
-                LogError($"Hydration reminder check failed: {ex.Message}");
-            }
 
             if (globalEnabled.GetValueOrDefault(Constants.Jobs.KeyAudit, true)
                 && Helpers.IsKeyAuditTime(now) && AppSettings.Guilds.Any(g => g.Features.KeyAudit && Helpers.IsGuildActive(g, now)))

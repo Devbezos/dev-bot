@@ -39,7 +39,6 @@ public partial class BotService : BackgroundService
     private readonly ITcgProductGroupRepository _tcgProductGroupRepository;
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
-    private readonly IHydrationReminderSettingsRepository _hydrationReminderSettingsRepository;
     private readonly IRxpGuidesWatchRepository _rxpGuidesWatchRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
@@ -71,7 +70,6 @@ public partial class BotService : BackgroundService
         ITcgProductGroupRepository tcgProductGroupRepository,
         ITcgMessageStateRepository tcgMessageStateRepository,
         IPokemonCenterSecurityStateRepository pokemonCenterSecurityStateRepository,
-        IHydrationReminderSettingsRepository hydrationReminderSettingsRepository,
         IRxpGuidesWatchRepository rxpGuidesWatchRepository,
         DiscordSocketClient discordBotClient)
     {
@@ -95,7 +93,6 @@ public partial class BotService : BackgroundService
         _tcgProductGroupRepository = tcgProductGroupRepository;
         _tcgMessageStateRepository = tcgMessageStateRepository;
         _pokemonCenterSecurityStateRepository = pokemonCenterSecurityStateRepository;
-        _hydrationReminderSettingsRepository = hydrationReminderSettingsRepository;
         _rxpGuidesWatchRepository = rxpGuidesWatchRepository;
         _discordBotClient    = discordBotClient;
     }
@@ -116,7 +113,6 @@ public partial class BotService : BackgroundService
         _tcgProductGroupRepository.EnsureTable();
         _tcgMessageStateRepository.EnsureTable();
         _pokemonCenterSecurityStateRepository.EnsureTable();
-        _hydrationReminderSettingsRepository.EnsureTable();
         _rxpGuidesWatchRepository.EnsureTable(AppSettings.RxpGuidesWatchThreadUrl);
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
@@ -177,10 +173,21 @@ public partial class BotService : BackgroundService
         // Throws on failure (unlike SendMessageAsync) so the caller can record it and retry.
         DiscordClient.SendFileAsync = async (channelId, content, filePath) =>
         {
-            if (AppSettings.DryRun) { LogInfo($"[DRY RUN] Send file {Path.GetFileName(filePath)} to channel {channelId}: {content}"); return; }
+            if (AppSettings.DryRun) { LogInfo($"[DRY RUN] Send file {Path.GetFileName(filePath)} to channel {channelId}: {content}"); return 0; }
             var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel
                 ?? throw new InvalidOperationException($"channel {channelId} not found");
-            await channel.SendFileAsync(filePath, content);
+            var message = await channel.SendFileAsync(filePath, content);
+            return message.Id;
+        };
+
+        // Throws when the message is gone or the bot lacks permission; the caller decides what to do.
+        DiscordClient.UnpinMessageAsync = async (channelId, messageId) =>
+        {
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel
+                ?? throw new InvalidOperationException($"channel {channelId} not found");
+            var message = await channel.GetMessageAsync(messageId) as IUserMessage
+                ?? throw new InvalidOperationException($"message {messageId} not found in channel {channelId}");
+            await message.UnpinAsync();
         };
 
         DiscordClient.SendMessageWithIdAsync = async (channelId, content) =>

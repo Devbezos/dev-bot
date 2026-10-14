@@ -25,7 +25,8 @@ public partial class BotService
             {
                 summonCommand.Build(),
                 leaveCommand.Build(),
-                BuildMacroCommand().Build()
+                BuildMacroCommand().Build(),
+                BuildRxpCommand().Build()
             };
 
             foreach (var guild in _discordBotClient.Guilds)
@@ -77,6 +78,9 @@ public partial class BotService
                     break;
                 case MacroCommandName:
                     await HandleMacroCommand(command);
+                    break;
+                case RxpCommandName:
+                    await HandleRxpCommand(command);
                     break;
             }
         }, $"command={command.Data.Name}");
