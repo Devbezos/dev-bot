@@ -63,39 +63,26 @@ public class RxpGuidesWatchTests
     }
 
     [Fact]
-    public void BuildRxpGuidesUpdateMessage_IncludesFileLinksAndEditNote()
+    public void BuildRxpGuidesUpdateMessage_NamesFileAndSizeWithoutLinks()
     {
-        var message = BuildMessage(
-            firstSeen: false,
-            new RxpGuidesArchive("RXPGuides-v4.11.23.rar", "abc", 11485722),
-            "https://f2h.io/mwqnua6virxw",
-            "https://forum.example.com/thread.html",
-            "Last edited by BlueRainsky; Today at 02:02 PM. Reason: Updated");
+        var message = BuildMessage(firstSeen: false, new RxpGuidesArchive("RXPGuides-v4.11.23.rar", "abc", 11485722, "unused"));
 
-        Assert.StartsWith("**RXPGuides has been updated.**", message);
-        Assert.Contains("`RXPGuides-v4.11.23.rar` (10.95 MB)", message);
-        Assert.Contains("Download: <https://f2h.io/mwqnua6virxw>", message);
-        Assert.Contains("Forum post: <https://forum.example.com/thread.html>", message);
-        Assert.Contains("-# Last edited by BlueRainsky", message);
+        Assert.Equal("**RXPGuides has been updated.**\n`RXPGuides-v4.11.23.rar` (10.95 MB)", message);
+        Assert.DoesNotContain("http", message);
     }
 
     [Fact]
     public void BuildRxpGuidesUpdateMessage_FirstSeenUsesStartedWording()
     {
-        var message = BuildMessage(
-            firstSeen: true,
-            new RxpGuidesArchive("RXPGuides.rar", "abc", 1024),
-            "https://f2h.io/x",
-            "https://forum.example.com/thread.html",
-            lastEdited: null);
+        var message = BuildMessage(firstSeen: true, new RxpGuidesArchive("RXPGuides.rar", "abc", 1024, "unused"));
 
         Assert.StartsWith("**RXPGuides watch started.**", message);
-        Assert.DoesNotContain("-#", message);
+        Assert.Contains("`RXPGuides.rar` (0.00 MB)", message);
     }
 
-    private static string BuildMessage(bool firstSeen, RxpGuidesArchive archive, string f2hUrl, string threadUrl, string? lastEdited)
+    private static string BuildMessage(bool firstSeen, RxpGuidesArchive archive)
     {
         var method = typeof(BotService).GetMethod("BuildRxpGuidesUpdateMessage", BindingFlags.NonPublic | BindingFlags.Static);
-        return (string)method!.Invoke(null, [firstSeen, archive, f2hUrl, threadUrl, lastEdited])!;
+        return (string)method!.Invoke(null, [firstSeen, archive])!;
     }
 }

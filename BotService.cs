@@ -174,6 +174,15 @@ public partial class BotService : BackgroundService
             }
         };
 
+        // Throws on failure (unlike SendMessageAsync) so the caller can record it and retry.
+        DiscordClient.SendFileAsync = async (channelId, content, filePath) =>
+        {
+            if (AppSettings.DryRun) { LogInfo($"[DRY RUN] Send file {Path.GetFileName(filePath)} to channel {channelId}: {content}"); return; }
+            var channel = _discordBotClient.GetChannel(channelId) as IMessageChannel
+                ?? throw new InvalidOperationException($"channel {channelId} not found");
+            await channel.SendFileAsync(filePath, content);
+        };
+
         DiscordClient.SendMessageWithIdAsync = async (channelId, content) =>
         {
             try

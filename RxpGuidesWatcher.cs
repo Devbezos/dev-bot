@@ -1,11 +1,13 @@
 using DevClient.Clients;
 using DevClient.Data;
+using Discord.WebSocket;
 
 public partial class BotService
 {
     // Daily: read the first post of the RXPGuides OwnedCore thread, follow its f2h.io link,
-    // hash the archive and post to the configured channel when the hash changes. Settings and
-    // last-seen state live in the rxp_guides_watch table (edited from the Schedule page).
+    // download and hash the archive, and post the archive itself to the configured channel
+    // when the hash changes. Settings and last-seen state live in the rxp_guides_watch table
+    // (edited from the Schedule page).
     private async Task RunRxpGuidesWatch(CancellationToken cancellationToken)
     {
         var watch = _rxpGuidesWatchRepository.Get();
@@ -49,70 +51,74 @@ public partial class BotService
             LogWarn($"RXPGuides watch: {warning}");
         }
 
-        RxpGuidesArchive archive;
+        var workDir = Path.Combine(Path.GetTempPath(), $"rxpguides-{Guid.NewGuid():N}");
         try
         {
-            archive = await client.DownloadArchive(f2hUrl, cancellationToken);
-            LogInfo($"RXPGuides archive {archive.FileName} ({archive.SizeBytes} bytes) sha256={archive.Sha256}");
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            LogError($"RXPGuides watch could not download {f2hUrl}: {ex.Message}");
-            _rxpGuidesWatchRepository.RecordChecked(checkedAt, $"Could not download {f2hUrl}: {ex.Message}");
-            return;
-        }
-
-        if (string.Equals(archive.Sha256, watch.Sha256, StringComparison.OrdinalIgnoreCase))
-        {
-            LogInfo("RXPGuides archive unchanged");
-            _rxpGuidesWatchRepository.RecordChecked(checkedAt, warning);
-            return;
-        }
-
-        var message = BuildRxpGuidesUpdateMessage(watch.Sha256 == null, archive, f2hUrl, watch.ThreadUrl, post?.LastEdited);
-        if (AppSettings.DryRun)
-        {
-            LogInfo($"[DRY RUN] RXPGuides update post to channel {watch.ChannelId}: {message}");
-        }
-        else
-        {
+            RxpGuidesArchive archive;
             try
             {
-                await _discordClient.PostToChannel(watch.ChannelId, message);
+                archive = await client.DownloadArchive(f2hUrl, workDir, cancellationToken);
+                LogInfo($"RXPGuides archive {archive.FileName} ({archive.SizeBytes} bytes) sha256={archive.Sha256}");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogError($"RXPGuides watch could not download {f2hUrl}: {ex.Message}");
+                _rxpGuidesWatchRepository.RecordChecked(checkedAt, $"Could not download {f2hUrl}: {ex.Message}");
+                return;
+            }
+
+            if (string.Equals(archive.Sha256, watch.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                LogInfo("RXPGuides archive unchanged");
+                _rxpGuidesWatchRepository.RecordChecked(checkedAt, warning);
+                return;
+            }
+
+            // Checked up front so the UI gets a clear reason instead of a raw Discord 413.
+            // The stored hash is left alone, so the file is posted once the limit allows it.
+            var uploadLimit = GetUploadLimitBytes(watch.ChannelId);
+            if (uploadLimit is { } limit && (ulong)archive.SizeBytes > limit)
+            {
+                var error = $"{archive.FileName} is {FormatMegabytes(archive.SizeBytes)} but the server's upload limit is {FormatMegabytes((long)limit)}";
+                LogWarn($"RXPGuides update not posted: {error}");
+                _rxpGuidesWatchRepository.RecordChecked(checkedAt, error);
+                return;
+            }
+
+            var message = BuildRxpGuidesUpdateMessage(watch.Sha256 == null, archive);
+            try
+            {
+                await _discordClient.PostFileToChannel(watch.ChannelId, message, archive.FilePath);
                 LogInfo($"Posted RXPGuides update ({archive.FileName}) to channel {watch.ChannelId}");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Leave the stored hash alone so the next run tries to post again.
                 LogError($"RXPGuides update post failed for channel {watch.ChannelId}: {ex.Message}");
                 _rxpGuidesWatchRepository.RecordChecked(checkedAt, $"Discord post failed: {ex.Message}");
                 return;
             }
-        }
 
-        _rxpGuidesWatchRepository.RecordChanged(f2hUrl, archive.FileName, archive.Sha256, archive.SizeBytes, post?.Text, checkedAt);
-        if (warning != null)
-            _rxpGuidesWatchRepository.RecordChecked(checkedAt, warning);
+            _rxpGuidesWatchRepository.RecordChanged(f2hUrl, archive.FileName, archive.Sha256, archive.SizeBytes, post?.Text, checkedAt);
+            if (warning != null)
+                _rxpGuidesWatchRepository.RecordChecked(checkedAt, warning);
+        }
+        finally
+        {
+            try { Directory.Delete(workDir, recursive: true); }
+            catch (DirectoryNotFoundException) { }
+            catch (Exception ex) { LogWarn($"RXPGuides watch could not clean up {workDir}: {ex.Message}"); }
+        }
     }
 
-    private static string BuildRxpGuidesUpdateMessage(
-        bool firstSeen,
-        RxpGuidesArchive archive,
-        string f2hUrl,
-        string threadUrl,
-        string? lastEdited)
+    private ulong? GetUploadLimitBytes(ulong channelId) =>
+        (_discordBotClient.GetChannel(channelId) as SocketGuildChannel)?.Guild.MaxUploadLimit;
+
+    private static string FormatMegabytes(long bytes) => $"{bytes / 1024d / 1024d:0.00} MB";
+
+    private static string BuildRxpGuidesUpdateMessage(bool firstSeen, RxpGuidesArchive archive)
     {
-        var lines = new List<string>
-        {
-            firstSeen ? "**RXPGuides watch started.** Current version:" : "**RXPGuides has been updated.**",
-            $"File: `{archive.FileName}` ({archive.SizeBytes / 1024d / 1024d:0.00} MB)",
-            $"Download: <{f2hUrl}>",
-            $"Forum post: <{threadUrl}>",
-        };
-
-        if (!string.IsNullOrWhiteSpace(lastEdited))
-            lines.Add($"-# {lastEdited}");
-
-        return string.Join('\n', lines);
+        var title = firstSeen ? "**RXPGuides watch started.** Current version:" : "**RXPGuides has been updated.**";
+        return $"{title}\n`{archive.FileName}` ({FormatMegabytes(archive.SizeBytes)})";
     }
 }
