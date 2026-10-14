@@ -24,7 +24,8 @@ public partial class BotService
             var commandProperties = new ApplicationCommandProperties[]
             {
                 summonCommand.Build(),
-                leaveCommand.Build()
+                leaveCommand.Build(),
+                BuildMacroCommand().Build()
             };
 
             foreach (var guild in _discordBotClient.Guilds)
@@ -73,6 +74,9 @@ public partial class BotService
                     break;
                 case LeaveCommandName:
                     await HandleLeaveCommand(command);
+                    break;
+                case MacroCommandName:
+                    await HandleMacroCommand(command);
                     break;
             }
         }, $"command={command.Data.Name}");
