@@ -118,7 +118,8 @@ public partial class BotService
 
     private static string BuildRxpGuidesUpdateMessage(bool firstSeen, RxpGuidesArchive archive)
     {
-        var title = firstSeen ? "**RXPGuides watch started.** Current version:" : "**RXPGuides has been updated.**";
+        // firstSeen covers both the very first run and a reset from the Schedule page.
+        var title = firstSeen ? "**RXPGuides current version:**" : "**RXPGuides has been updated.**";
         return $"{title}\n`{archive.FileName}` ({FormatMegabytes(archive.SizeBytes)})";
     }
 }

@@ -72,11 +72,11 @@ public class RxpGuidesWatchTests
     }
 
     [Fact]
-    public void BuildRxpGuidesUpdateMessage_FirstSeenUsesStartedWording()
+    public void BuildRxpGuidesUpdateMessage_FirstSeenUsesCurrentVersionWording()
     {
         var message = BuildMessage(firstSeen: true, new RxpGuidesArchive("RXPGuides.rar", "abc", 1024, "unused"));
 
-        Assert.StartsWith("**RXPGuides watch started.**", message);
+        Assert.StartsWith("**RXPGuides current version:**", message);
         Assert.Contains("`RXPGuides.rar` (0.00 MB)", message);
     }
 
