@@ -29,7 +29,7 @@ public partial class BotService
                 return;
             }
 
-            await command.RespondAsync($"🍔 {jokes[Random.Shared.Next(jokes.Length)]}");
+            await command.RespondAsync(jokes[Random.Shared.Next(jokes.Length)]);
         }, $"command={command.Data.Name}, guildId={command.GuildId}");
     }
 }
