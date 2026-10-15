@@ -28,7 +28,8 @@ public partial class BotService
                 BuildMacroCommand().Build(),
                 BuildRxpCommand().Build(),
                 BuildMotivateCommand().Build(),
-                BuildLariasCommand().Build()
+                BuildLariasCommand().Build(),
+                BuildDevCommand().Build()
             };
 
             foreach (var guild in _discordBotClient.Guilds)
@@ -89,6 +90,9 @@ public partial class BotService
                     break;
                 case LariasCommandName:
                     await HandleLariasCommand(command);
+                    break;
+                case DevCommandName:
+                    await HandleDevCommand(command);
                     break;
             }
         }, $"command={command.Data.Name}");
