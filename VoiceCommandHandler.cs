@@ -27,13 +27,10 @@ public partial class BotService
                 leaveCommand.Build(),
                 BuildMacroCommand().Build(),
                 BuildRxpCommand().Build(),
-                BuildMotivateCommand().Build(),
-                BuildLariasCommand().Build(),
-                BuildDevCommand().Build(),
-                BuildLoyalCommand().Build(),
-                BuildRayCommand().Build(),
                 BuildCatCommand().Build()
-            };
+            }
+            .Concat(TextCommands.All.Select(textCommand => textCommand.BuildCommand().Build()))
+            .ToArray();
 
             foreach (var guild in _discordBotClient.Guilds)
             {
@@ -88,23 +85,12 @@ public partial class BotService
                 case RxpCommandName:
                     await HandleRxpCommand(command);
                     break;
-                case MotivateCommandName:
-                    await HandleMotivateCommand(command);
-                    break;
-                case LariasCommandName:
-                    await HandleLariasCommand(command);
-                    break;
-                case DevCommandName:
-                    await HandleDevCommand(command);
-                    break;
-                case LoyalCommandName:
-                    await HandleLoyalCommand(command);
-                    break;
-                case RayCommandName:
-                    await HandleRayCommand(command);
-                    break;
                 case CatCommandName:
                     await HandleCatCommand(command);
+                    break;
+                default:
+                    if (TextCommands.Find(command.Data.Name) is { } textCommand)
+                        await HandleTextCommand(command, textCommand);
                     break;
             }
         }, $"command={command.Data.Name}");
