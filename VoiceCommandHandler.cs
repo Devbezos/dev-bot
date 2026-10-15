@@ -31,7 +31,8 @@ public partial class BotService
                 BuildLariasCommand().Build(),
                 BuildDevCommand().Build(),
                 BuildLoyalCommand().Build(),
-                BuildRayCommand().Build()
+                BuildRayCommand().Build(),
+                BuildCatCommand().Build()
             };
 
             foreach (var guild in _discordBotClient.Guilds)
@@ -101,6 +102,9 @@ public partial class BotService
                     break;
                 case RayCommandName:
                     await HandleRayCommand(command);
+                    break;
+                case CatCommandName:
+                    await HandleCatCommand(command);
                     break;
             }
         }, $"command={command.Data.Name}");
