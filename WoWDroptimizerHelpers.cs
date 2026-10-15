@@ -18,6 +18,11 @@ public partial class BotService
 
     private sealed record RaidBotsCharacterIdentity(string Name, string Realm, string? Spec, string? Role);
 
+    // One shared client for WoW Audit and Raidbots calls. Creating an HttpClient per request leaves sockets
+    // in TIME_WAIT and can exhaust them under load; per-request headers go on the HttpRequestMessage instead.
+    private static readonly HttpClient DroptimizerHttpClient = new();
+    private const string RaidBotsUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+
     private static bool HasWoWUtilsConfig(DroptimizerSettings? droptimizer) =>
         !string.IsNullOrWhiteSpace(droptimizer?.ApiKey)
         && !string.IsNullOrWhiteSpace(droptimizer?.GroupId);
@@ -84,14 +89,14 @@ public partial class BotService
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException($"WoW Audit token is missing for guild {guildName}");
 
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        var body = new StringContent(
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Constants.WoW.WoWAudit.Url}/wishlists");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(
             JsonConvert.SerializeObject(new WoWAuditWishlistRequest(reportId)),
             Encoding.UTF8,
             "application/json");
 
-        using var response = await client.PostAsync($"{Constants.WoW.WoWAudit.Url}/wishlists", body);
+        using var response = await DroptimizerHttpClient.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
 
         if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable)
@@ -152,10 +157,10 @@ public partial class BotService
 
     private async Task<RaidBotsCharacterIdentity> GetRaidBotsCharacterIdentity(string reportId)
     {
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"https://www.raidbots.com/simbot/report/{reportId}/input.txt");
+        request.Headers.Add("User-Agent", RaidBotsUserAgent);
 
-        using var response = await client.GetAsync($"https://www.raidbots.com/simbot/report/{reportId}/input.txt");
+        using var response = await DroptimizerHttpClient.SendAsync(request);
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new HttpRequestException($"Raidbots input not found for {reportId}", null, response.StatusCode);
 

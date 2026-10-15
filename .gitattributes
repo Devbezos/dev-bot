@@ -1,0 +1,19 @@
+# Store text files with LF line endings in the repo; Git converts to the local platform style on checkout.
+* text=auto
+
+# Binary files: never convert line endings or diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.mp3 binary
+*.wav binary
+*.zip binary
+*.rar binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
