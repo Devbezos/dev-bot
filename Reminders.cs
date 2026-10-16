@@ -23,21 +23,33 @@ public partial class BotService
             {
                 if (!_schedulerReady)
                     continue;
-                try
+                await RunReminderStep("reminders", async () =>
                 {
                     await ProcessReminders();
                     await RefreshReminderUserNames();
-                }
-                catch (Exception ex)
-                {
-                    LogException(ex, "reminders");
-                    LogError($"Reminder processing failed: {ex.Message}");
-                }
+                });
+                await RunReminderStep("goal reminders", ProcessGoalReminders);
+                await RunReminderStep("progress check-in", ProcessProgressCheckIn);
+                await RunReminderStep("scheduled task list", RefreshScheduledTaskSnapshot);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Shutting down.
+        }
+    }
+
+    // Each step fails on its own so a broken goal reminder can't stop regular reminders or the check-in.
+    private async Task RunReminderStep(string name, Func<Task> step)
+    {
+        try
+        {
+            await step();
+        }
+        catch (Exception ex)
+        {
+            LogException(ex, name);
+            LogError($"{name} processing failed: {ex.Message}");
         }
     }
 

@@ -30,6 +30,9 @@ public partial class BotService
         await RunLoggedAsync(async () =>
         {
             if (message.Author.IsBot) return;
+            if (await TryHandleGameServerCommand(message)) return;
+            if (message.Channel is IDMChannel && await TryHandleWaterMessage(message)) return;
+            if (message.Channel is IDMChannel && await TryHandleProgressCheckInReply(message)) return;
 
             ReloadGuildsIfStale();
             ReloadAutoReactionsIfStale();

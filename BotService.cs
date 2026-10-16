@@ -42,6 +42,12 @@ public partial class BotService : BackgroundService
     private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
     private readonly IRxpGuidesWatchRepository _rxpGuidesWatchRepository;
     private readonly IReminderRepository _reminderRepository;
+    private readonly IGoalRepository _goalRepository;
+    private readonly IProgressRepository _progressRepository;
+    private readonly IProgressCheckInRepository _progressCheckInRepository;
+    private readonly IDiscordUserRepository _discordUserRepository;
+    private readonly IGameServerRepository _gameServerRepository;
+    private readonly IWaterRepository _waterRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
     private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
@@ -74,6 +80,12 @@ public partial class BotService : BackgroundService
         IPokemonCenterSecurityStateRepository pokemonCenterSecurityStateRepository,
         IRxpGuidesWatchRepository rxpGuidesWatchRepository,
         IReminderRepository reminderRepository,
+        IGoalRepository goalRepository,
+        IProgressRepository progressRepository,
+        IProgressCheckInRepository progressCheckInRepository,
+        IDiscordUserRepository discordUserRepository,
+        IGameServerRepository gameServerRepository,
+        IWaterRepository waterRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -98,6 +110,12 @@ public partial class BotService : BackgroundService
         _pokemonCenterSecurityStateRepository = pokemonCenterSecurityStateRepository;
         _rxpGuidesWatchRepository = rxpGuidesWatchRepository;
         _reminderRepository = reminderRepository;
+        _goalRepository = goalRepository;
+        _progressRepository = progressRepository;
+        _progressCheckInRepository = progressCheckInRepository;
+        _discordUserRepository = discordUserRepository;
+        _gameServerRepository = gameServerRepository;
+        _waterRepository = waterRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -119,6 +137,12 @@ public partial class BotService : BackgroundService
         _pokemonCenterSecurityStateRepository.EnsureTable();
         _rxpGuidesWatchRepository.EnsureTable(AppSettings.RxpGuidesWatchThreadUrl);
         _reminderRepository.EnsureTable();
+        _discordUserRepository.EnsureTable();
+        _goalRepository.EnsureTables();
+        _progressRepository.EnsureTable();
+        _progressCheckInRepository.EnsureTable();
+        _gameServerRepository.EnsureTables();
+        _waterRepository.EnsureTables();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _autoReactionRules = _autoReactionRepository.GetAll();
