@@ -6,6 +6,11 @@ using Discord.WebSocket;
 public partial class BotService
 {
     private static readonly TimeSpan ReminderPollInterval = TimeSpan.FromSeconds(30);
+    // Cached recipient names are refreshed daily so renames show up in the UI.
+    private static readonly TimeSpan ReminderNameMaxAge = TimeSpan.FromDays(1);
+    private static readonly TimeSpan ReminderNameRetryDelay = TimeSpan.FromHours(1);
+    // User IDs whose lookup failed, so a bad ID isn't re-fetched every tick.
+    private readonly Dictionary<ulong, DateTime> _reminderNameRetryAfterUtc = [];
 
     // Runs for the bot's lifetime. Reminders get their own loop instead of the scheduler tick so a long TCG
     // scrape (which holds the tick lock) or a failing job can't delay or skip them.
@@ -21,6 +26,7 @@ public partial class BotService
                 try
                 {
                     await ProcessReminders();
+                    await RefreshReminderUserNames();
                 }
                 catch (Exception ex)
                 {
@@ -60,6 +66,34 @@ public partial class BotService
                 _reminderRepository.MarkSent(reminder.Id, nowUtc, null);
                 LogException(ex, $"reminderId={reminder.Id}");
                 LogWarn($"Reminder {reminder.Id} DM to {reminder.DiscordUserId} failed: {ex.Message}");
+            }
+        }
+    }
+
+    // Caches the username of each reminder recipient so the Reminders tab can show who it DMs.
+    private async Task RefreshReminderUserNames()
+    {
+        var nowUtc = DateTime.UtcNow;
+        foreach (var userId in _reminderRepository.GetUserIdsNeedingNames(nowUtc - ReminderNameMaxAge))
+        {
+            if (_reminderNameRetryAfterUtc.TryGetValue(userId, out var retryAfter) && nowUtc < retryAfter)
+                continue;
+            try
+            {
+                IUser? user = _discordBotClient.GetUser(userId);
+                user ??= await _discordBotClient.Rest.GetUserAsync(userId);
+                if (user is null)
+                {
+                    _reminderNameRetryAfterUtc[userId] = nowUtc + ReminderNameRetryDelay;
+                    continue;
+                }
+                _reminderRepository.SaveUserName(userId, user.Username, user.GlobalName, nowUtc);
+                _reminderNameRetryAfterUtc.Remove(userId);
+            }
+            catch (Exception ex)
+            {
+                _reminderNameRetryAfterUtc[userId] = nowUtc + ReminderNameRetryDelay;
+                LogWarn($"Could not look up Discord user {userId} for reminders: {ex.Message}");
             }
         }
     }
