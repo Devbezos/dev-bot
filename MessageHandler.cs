@@ -30,10 +30,7 @@ public partial class BotService
         await RunLoggedAsync(async () =>
         {
             if (message.Author.IsBot) return;
-            if (await TryHandleBotCommand(message)) return;
-            if (message.Channel is IDMChannel && await TryHandleDmSlashCommand(message)) return;
-            if (message.Channel is IDMChannel && await TryHandleWaterMessage(message)) return;
-            if (message.Channel is IDMChannel && await TryHandleProgressCheckInReply(message)) return;
+            if (await HandleMessageToBot(message)) return;
 
             ReloadGuildsIfStale();
             ReloadAutoReactionsIfStale();
@@ -54,6 +51,44 @@ public partial class BotService
                 await MonitorDroptimizers(message);
             }
         }, $"messageId={message.Id}");
+    }
+
+    // Features that answer DMs (and keyword commands, which also answer mentions). Every DM and every message
+    // mentioning the bot is logged with what handled it, even when a handler fails. Returns true when handled.
+    private async Task<bool> HandleMessageToBot(SocketMessage message)
+    {
+        var isDm = message.Channel is IDMChannel;
+        var mentionsBot = message.MentionedUsers.Any(u => u.Id == _discordBotClient.CurrentUser?.Id);
+        string? handledAs = null;
+        try
+        {
+            if (await TryHandleBotCommand(message)) handledAs = "command";
+            else if (isDm && await TryHandleDmSlashCommand(message)) handledAs = "slash";
+            else if (isDm && await TryHandleWaterMessage(message)) handledAs = "water";
+            else if (isDm && await TryHandleProgressCheckInReply(message)) handledAs = "check-in";
+            return handledAs != null;
+        }
+        finally
+        {
+            if (isDm || mentionsBot)
+                LogMessageToBot(message, handledAs);
+        }
+    }
+
+    private void LogMessageToBot(SocketMessage message, string? handledAs)
+    {
+        try
+        {
+            var guildChannel = message.Channel as SocketGuildChannel;
+            var attachments = message.Attachments.Count == 0 ? null : string.Join('\n', message.Attachments.Select(a => a.Url));
+            _botActivityRepository.LogMessage(
+                message.Id, message.Author.Id, message.Author.Username, guildChannel?.Guild.Id, guildChannel?.Guild.Name,
+                message.Channel.Id, guildChannel?.Name, message.Content, attachments, handledAs, message.Timestamp.UtcDateTime);
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not log message {message.Id}: {ex.Message}");
+        }
     }
 
     public async Task MonitorDroptimizers(SocketMessage message)

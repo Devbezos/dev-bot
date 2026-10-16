@@ -48,6 +48,8 @@ public partial class BotService : BackgroundService
     private readonly IDiscordUserRepository _discordUserRepository;
     private readonly IBotCommandRepository _botCommandRepository;
     private readonly IWaterRepository _waterRepository;
+    private readonly IBotActivityRepository _botActivityRepository;
+    private readonly IStepUpdateRepository _stepUpdateRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
     private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
@@ -86,6 +88,8 @@ public partial class BotService : BackgroundService
         IDiscordUserRepository discordUserRepository,
         IBotCommandRepository botCommandRepository,
         IWaterRepository waterRepository,
+        IBotActivityRepository botActivityRepository,
+        IStepUpdateRepository stepUpdateRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -116,6 +120,8 @@ public partial class BotService : BackgroundService
         _discordUserRepository = discordUserRepository;
         _botCommandRepository = botCommandRepository;
         _waterRepository = waterRepository;
+        _botActivityRepository = botActivityRepository;
+        _stepUpdateRepository = stepUpdateRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -143,6 +149,8 @@ public partial class BotService : BackgroundService
         _progressCheckInRepository.EnsureTable();
         _botCommandRepository.EnsureTables();
         _waterRepository.EnsureTables();
+        _botActivityRepository.EnsureTables();
+        _stepUpdateRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _autoReactionRules = _autoReactionRepository.GetAll();

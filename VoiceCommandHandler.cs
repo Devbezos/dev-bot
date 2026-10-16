@@ -110,6 +110,7 @@ public partial class BotService
 
     private async Task RunSlashCommand(CommandInvocation command)
     {
+        LogSlashCommandUse(command);
         await RunLoggedAsync(async () =>
         {
             switch (command.Name)
@@ -135,6 +136,21 @@ public partial class BotService
                     break;
             }
         }, $"command={command.Name}");
+    }
+
+    private void LogSlashCommandUse(CommandInvocation command)
+    {
+        try
+        {
+            var guild = command.GuildId is { } guildId ? _discordBotClient.GetGuild(guildId) : null;
+            _botActivityRepository.LogSlashCommand(
+                command.Name, command.User.Id, command.User.Username, command.GuildId, guild?.Name, command.Channel?.Id,
+                command is DmCommandInvocation ? "dm" : "slash", DateTime.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not log /{command.Name} use: {ex.Message}");
+        }
     }
 
     // In a server: the user's voice channel there. In a DM: whichever voice channel they're in, in any server the bot shares.

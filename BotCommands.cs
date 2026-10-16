@@ -70,21 +70,92 @@ public partial class BotService
             _botCommandLock.Release();
         }
 
-        if (command.Action == "task")
-            await RunTaskCommand(command, runId, reply);
-        else
-            _ = Task.Run(() => RunScriptCommand(command, runId, reply));
+        _ = Task.Run(() => command.Action == "task" ? RunTaskCommand(command, runId, reply) : RunScriptCommand(command, runId, reply));
     }
 
+    // schtasks only starts the task, so the bot then watches its status until it stops running and reports
+    // the task's result: "still running" after a short wait, edited again when it finishes.
     private async Task RunTaskCommand(BotCommand command, int runId, IUserMessage reply)
     {
-        var (ok, output) = AppSettings.DryRun ? (true, "[DRY RUN] task not run") : await ScheduledTaskRunner.RunAsync(command.Target);
-        _botCommandRepository.FinishRun(runId, ok, null, output, DateTime.UtcNow);
-        if (!ok)
-            LogWarn($"Bot command '{command.Name}' failed: {output}");
-        await reply.ModifyAsync(m => m.Content = ok
-            ? $"✅ **{command.Name}** started."
-            : $"❌ Couldn't run **{command.Name}**: {Truncate(output, 300)}");
+        try
+        {
+            if (AppSettings.DryRun)
+            {
+                _botCommandRepository.FinishRun(runId, true, 0, "[DRY RUN] task not run", DateTime.UtcNow);
+                await reply.ModifyAsync(m => m.Content = $"✅ **{command.Name}** finished (dry run).");
+                return;
+            }
+
+            var before = await ScheduledTaskRunner.GetStatusAsync(command.Target);
+            var (ok, output) = await ScheduledTaskRunner.RunAsync(command.Target);
+            if (!ok)
+            {
+                LogWarn($"Bot command '{command.Name}' failed to start: {output}");
+                _botCommandRepository.FinishRun(runId, false, null, output, DateTime.UtcNow);
+                await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**: {Truncate(output, 300)}");
+                return;
+            }
+
+            var (finished, status) = await WatchTask(command, reply, before?.LastRunTime);
+            if (!finished || status is null)
+            {
+                _botCommandRepository.FinishRun(runId, true, null, output, DateTime.UtcNow);
+                await reply.ModifyAsync(m => m.Content = status is null
+                    ? $"✅ **{command.Name}** started, but I couldn't read the task's status to see when it finishes."
+                    : $"⏳ **{command.Name}** is still running after {ScriptMaxWait.TotalHours:0} hours; I've stopped watching it.");
+                return;
+            }
+
+            var result = status.LastResult;
+            var succeeded = result is 0 or null;
+            var code = result is { } r ? $"0x{r:X}" : "unknown";
+            _botCommandRepository.FinishRun(runId, succeeded, result, $"Last result {code}", DateTime.UtcNow);
+            if (!succeeded)
+                LogWarn($"Bot command '{command.Name}' task finished with result {code}");
+            await reply.ModifyAsync(m => m.Content = succeeded
+                ? $"✅ **{command.Name}** finished."
+                : $"❌ **{command.Name}** finished with an error (task result {code}).");
+        }
+        catch (Exception ex)
+        {
+            LogException(ex, $"botCommand={command.Name}");
+            _botCommandRepository.FinishRun(runId, false, null, ex.Message, DateTime.UtcNow);
+            try { await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**: {Truncate(ex.Message, 300)}"); }
+            catch (Exception replyEx) { LogWarn($"Could not report bot command failure: {replyEx.Message}"); }
+        }
+    }
+
+    // Polls until the run that was just started has ended. A run counts as started once the task shows as running
+    // or its last-run time moves on (a quick task can finish between two polls). Returns the final status, or
+    // finished = false when it's still running at the deadline; a null status means it couldn't be read.
+    private async Task<(bool Finished, ScheduledTaskStatus? Status)> WatchTask(BotCommand command, IUserMessage reply, string? lastRunBefore)
+    {
+        var started = DateTime.UtcNow;
+        var toldStillRunning = false;
+        ScheduledTaskStatus? status = null;
+        var sawStart = false;
+        while (DateTime.UtcNow - started < ScriptMaxWait)
+        {
+            var elapsed = DateTime.UtcNow - started;
+            await Task.Delay(elapsed < TimeSpan.FromMinutes(2) ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(30));
+            status = await ScheduledTaskRunner.GetStatusAsync(command.Target);
+            if (status is null)
+                return (false, null);
+
+            sawStart |= status.IsRunning || status.LastRunTime != lastRunBefore;
+            if (sawStart && !status.IsRunning)
+                return (true, status);
+            // Never seen running after a minute: it may have run and ended within the same second as last time.
+            if (!sawStart && DateTime.UtcNow - started > TimeSpan.FromMinutes(1))
+                return (true, status);
+
+            if (!toldStillRunning && DateTime.UtcNow - started >= ScriptQuickWait)
+            {
+                toldStillRunning = true;
+                await reply.ModifyAsync(m => m.Content = $"⏳ **{command.Name}** is still running. I'll update this message when it finishes.");
+            }
+        }
+        return (false, status);
     }
 
     // Scripts can take minutes: the reply says "still running" after a short wait and is edited again when it exits.

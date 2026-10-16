@@ -1,14 +1,16 @@
 using System.Globalization;
 using DevApi.Data;
+using DevClient.Data;
 using Discord;
 using Discord.WebSocket;
 
 public partial class BotService
 {
     private const string WaterUndoPrefix = "water:undo:";
+    private const string WaterAddPrefix = "water:add:";
 
-    // A DM that's just an amount ("10oz", "1.5L", "500ML") logs water; "water" alone shows today's total.
-    // Only users saved on the Users tab can log, so random DMs aren't stored.
+    // A DM that's just an amount ("10oz", "1.5L", "500ML") logs water for whoever sent it; "water" alone shows
+    // today's total. Anyone can use it: new people are added to the Users tab so their water shows on the Water tab.
     private async Task<bool> TryHandleWaterMessage(SocketMessage message)
     {
         var text = message.Content.Trim();
@@ -18,8 +20,8 @@ public partial class BotService
             return false;
 
         var userId = message.Author.Id;
-        if (!_discordUserRepository.GetAll().Any(u => u.UserId == userId.ToString()))
-            return false;
+        if (!summaryOnly)
+            SaveWaterUser(message.Author);
 
         var today = DateOnly.FromDateTime(LifeLocalNow()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var settings = _waterRepository.GetSettings(userId);
@@ -40,8 +42,101 @@ public partial class BotService
         return true;
     }
 
+    // DMs anyone with reminders on who hasn't logged water for their interval (only during their active hours,
+    // and not once today's goal is met).
+    private async Task ProcessWaterReminders()
+    {
+        var zone = ReminderSchedule.FindTimeZone(LifeTimeZone);
+        var nowUtc = DateTime.UtcNow;
+        var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, zone);
+        var today = DateOnly.FromDateTime(nowLocal).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        DateTime? ToLocal(DateTime? utc) => utc is { } u ? TimeZoneInfo.ConvertTimeFromUtc(u, zone) : null;
+
+        foreach (var state in _waterRepository.GetReminderStates(today))
+        {
+            if (!WaterRules.ShouldRemind(state.Settings, nowLocal, ToLocal(state.LastEntryUtc), ToLocal(state.LastRemindedUtc), state.TodayTotalMl))
+                continue;
+
+            // Marked first so a failing DM isn't retried every tick.
+            _waterRepository.MarkReminded(state.UserId, nowUtc);
+            var text = $"💧 Time for some water! It's been a while since your last drink.\nToday: {DescribeWaterTotal(state.TodayTotalMl, state.Settings)}\n" +
+                       "-# Tap a button or send an amount like `500ml`.";
+            if (AppSettings.DryRun)
+            {
+                LogInfo($"[DRY RUN] Water reminder to {state.UserId}");
+                continue;
+            }
+
+            try
+            {
+                var dm = await GetDmChannel(state.UserId);
+                if (dm is null)
+                {
+                    LogWarn($"Water reminder: Discord user {state.UserId} not found");
+                    continue;
+                }
+                await dm.SendMessageAsync(text, components: BuildWaterQuickAddButtons(state.Settings.Unit));
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"Water reminder DM to {state.UserId} failed: {ex.Message}");
+            }
+        }
+    }
+
+    private static MessageComponent BuildWaterQuickAddButtons(string unit)
+    {
+        var amounts = unit == "oz"
+            ? new[] { ("8 oz", 8 * WaterRules.MlPerOz), ("16 oz", 16 * WaterRules.MlPerOz), ("32 oz", 32 * WaterRules.MlPerOz) }
+            : new[] { ("250 ml", 250m), ("500 ml", 500m), ("1 L", 1000m) };
+        var builder = new ComponentBuilder();
+        foreach (var (label, ml) in amounts)
+            builder.WithButton($"+{label}", $"{WaterAddPrefix}{Math.Round(ml, 1).ToString(CultureInfo.InvariantCulture)}", ButtonStyle.Primary, new Emoji("💧"));
+        return builder.Build();
+    }
+
+    // A quick-add button on a reminder: logs that amount and answers like a typed amount would.
+    private async Task<bool> TryHandleWaterAddButton(SocketMessageComponent component)
+    {
+        if (!component.Data.CustomId.StartsWith(WaterAddPrefix, StringComparison.Ordinal)
+            || !decimal.TryParse(component.Data.CustomId[WaterAddPrefix.Length..], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var amountMl)
+            || amountMl is <= 0 or > 10_000)
+            return false;
+
+        var userId = component.User.Id;
+        var today = DateOnly.FromDateTime(LifeLocalNow()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var settings = _waterRepository.GetSettings(userId);
+        _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, $"button {WaterRules.Format(amountMl, settings.Unit)}");
+        var total = _waterRepository.GetTotal(userId, today);
+        await component.UpdateAsync(m =>
+        {
+            m.Content = $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}";
+            m.Components = new ComponentBuilder().Build();
+        });
+        return true;
+    }
+
+    // Adds a first-time water logger to the saved users (by their Discord name); never renames someone already saved.
+    private void SaveWaterUser(IUser author)
+    {
+        try
+        {
+            if (!_discordUserRepository.GetAll().Any(u => u.UserId == author.Id.ToString()))
+            {
+                _discordUserRepository.Upsert(author.Id, author.GlobalName ?? author.Username);
+                LogInfo($"Added {author.Username} ({author.Id}) to saved users after their first water log");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not save water user {author.Id}: {ex.Message}");
+        }
+    }
+
     private async Task<bool> TryHandleWaterButton(SocketMessageComponent component)
     {
+        if (await TryHandleWaterAddButton(component))
+            return true;
         if (!component.Data.CustomId.StartsWith(WaterUndoPrefix, StringComparison.Ordinal)
             || !int.TryParse(component.Data.CustomId[WaterUndoPrefix.Length..], out var entryId))
             return false;

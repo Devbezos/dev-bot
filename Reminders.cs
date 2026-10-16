@@ -30,6 +30,8 @@ public partial class BotService
                 });
                 await RunReminderStep("goal reminders", ProcessGoalReminders);
                 await RunReminderStep("progress check-in", ProcessProgressCheckIn);
+                await RunReminderStep("water reminders", ProcessWaterReminders);
+                await RunReminderStep("step updates", ProcessStepUpdates);
                 await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);
             }
         }
