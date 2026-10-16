@@ -56,6 +56,8 @@ public partial class BotService
             {
                 if (interaction is SocketSlashCommand slashCommand)
                     await HandleSlashCommand(slashCommand);
+                else if (interaction is SocketMessageComponent component)
+                    await HandleReminderButton(component);
             }
             catch (Exception ex)
             {

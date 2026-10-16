@@ -3,6 +3,7 @@ using DevClient.Data;
 using DevClient.Data.Discord;
 using DevClient.Data.Fitness;
 using DevClient;
+using DevApi.Data;
 using Discord;
 using Discord.Audio;
 using Discord.WebSocket;
@@ -40,6 +41,7 @@ public partial class BotService : BackgroundService
     private readonly ITcgMessageStateRepository _tcgMessageStateRepository;
     private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
     private readonly IRxpGuidesWatchRepository _rxpGuidesWatchRepository;
+    private readonly IReminderRepository _reminderRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
     private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
@@ -71,6 +73,7 @@ public partial class BotService : BackgroundService
         ITcgMessageStateRepository tcgMessageStateRepository,
         IPokemonCenterSecurityStateRepository pokemonCenterSecurityStateRepository,
         IRxpGuidesWatchRepository rxpGuidesWatchRepository,
+        IReminderRepository reminderRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -94,6 +97,7 @@ public partial class BotService : BackgroundService
         _tcgMessageStateRepository = tcgMessageStateRepository;
         _pokemonCenterSecurityStateRepository = pokemonCenterSecurityStateRepository;
         _rxpGuidesWatchRepository = rxpGuidesWatchRepository;
+        _reminderRepository = reminderRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -114,6 +118,7 @@ public partial class BotService : BackgroundService
         _tcgMessageStateRepository.EnsureTable();
         _pokemonCenterSecurityStateRepository.EnsureTable();
         _rxpGuidesWatchRepository.EnsureTable(AppSettings.RxpGuidesWatchThreadUrl);
+        _reminderRepository.EnsureTable();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _autoReactionRules = _autoReactionRepository.GetAll();
@@ -131,7 +136,7 @@ public partial class BotService : BackgroundService
         await _discordBotClient.StartAsync();
 
         LogInfo("Bot started");
-        await Task.Delay(Timeout.Infinite, stoppingToken);
+        await RunReminderLoop(stoppingToken);
     }
 
     private Task OnConnected()
