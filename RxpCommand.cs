@@ -14,7 +14,7 @@ public partial class BotService
 
     // Sends the stored archive by DM. Only downloads when nothing is stored yet (e.g. right after
     // a fresh deploy, before the daily watch has run). All replies are ephemeral.
-    private async Task HandleRxpCommand(SocketSlashCommand command)
+    private async Task HandleRxpCommand(CommandInvocation command)
     {
         // Fetching can take a minute; deferring keeps the interaction alive past Discord's 3s
         // window, and running the rest off the gateway task keeps the bot responsive meanwhile.
@@ -29,13 +29,13 @@ public partial class BotService
             catch (Exception ex)
             {
                 LogError($"/rxp failed for user {command.User.Id}: {ex.Message}");
-                try { await RespondToCommandAsync(command, "Something went wrong while sending the RXPGuides file."); }
+                try { await command.ReplyAsync("Something went wrong while sending the RXPGuides file.", ephemeral: true); }
                 catch (Exception replyEx) { LogWarn($"/rxp could not report the failure: {replyEx.Message}"); }
             }
         });
     }
 
-    private async Task SendRxpGuidesDm(SocketSlashCommand command)
+    private async Task SendRxpGuidesDm(CommandInvocation command)
     {
         await RunLoggedAsync(async () =>
         {
@@ -49,7 +49,7 @@ public partial class BotService
                     var fetched = await FetchRxpGuidesArchive(_rxpGuidesWatchRepository.Get(), workDir, CancellationToken.None);
                     if (fetched.Archive == null)
                     {
-                        await RespondToCommandAsync(command, $"Couldn't get the latest RXPGuides file: {fetched.Error}");
+                        await command.ReplyAsync($"Couldn't get the latest RXPGuides file: {fetched.Error}", ephemeral: true);
                         return;
                     }
 
@@ -73,13 +73,13 @@ public partial class BotService
             }
             catch (HttpException ex) when (ex.DiscordCode == DiscordErrorCode.CannotSendMessageToUser)
             {
-                await RespondToCommandAsync(command, "I can't DM you. Allow direct messages from server members and try again.");
+                await command.ReplyAsync("I can't DM you. Allow direct messages from server members and try again.", ephemeral: true);
                 return;
             }
             catch (HttpException ex) when (ex.DiscordCode == DiscordErrorCode.RequestEntityTooLarge || ex.HttpCode == HttpStatusCode.RequestEntityTooLarge)
             {
                 LogWarn($"/rxp: {fileName} ({size}) is over Discord's DM upload limit");
-                await RespondToCommandAsync(command, $"`{fileName}` is {size}, which is over Discord's upload limit for DMs, so I can't send it.");
+                await command.ReplyAsync($"`{fileName}` is {size}, which is over Discord's upload limit for DMs, so I can't send it.", ephemeral: true);
                 return;
             }
             finally
@@ -87,7 +87,9 @@ public partial class BotService
                 RxpGuidesArchiveLock.Release();
             }
 
-            await RespondToCommandAsync(command, $"Sent you `{fileName}` in DMs.");
-        }, $"command={command.Data.Name}, userId={command.User.Id}");
+            // Asked in a DM, the file itself is the reply.
+            if (command.GuildId is not null)
+                await command.ReplyAsync($"Sent you `{fileName}` in DMs.", ephemeral: true);
+        }, $"command={command.Name}, userId={command.User.Id}");
     }
 }

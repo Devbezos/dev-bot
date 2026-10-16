@@ -62,7 +62,7 @@ public static class TextCommands
 public partial class BotService
 {
     // Public reply (not ephemeral) so the whole channel sees it.
-    private async Task HandleTextCommand(SocketSlashCommand command, TextCommand textCommand)
+    private async Task HandleTextCommand(CommandInvocation command, TextCommand textCommand)
     {
         await RunLoggedAsync(async () =>
         {
@@ -70,11 +70,11 @@ public partial class BotService
             if (line is null)
             {
                 LogWarn($"/{textCommand.Name} has no lines; expected file at {textCommand.FilePath}");
-                await command.RespondAsync($"The /{textCommand.Name} file is missing.", ephemeral: true);
+                await command.ReplyAsync($"The /{textCommand.Name} file is missing.", ephemeral: true);
                 return;
             }
 
-            await command.RespondAsync(line);
-        }, $"command={command.Data.Name}, guildId={command.GuildId}");
+            await command.ReplyAsync(line);
+        }, $"command={command.Name}, guildId={command.GuildId}");
     }
 }

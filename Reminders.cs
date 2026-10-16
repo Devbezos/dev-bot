@@ -30,7 +30,7 @@ public partial class BotService
                 });
                 await RunReminderStep("goal reminders", ProcessGoalReminders);
                 await RunReminderStep("progress check-in", ProcessProgressCheckIn);
-                await RunReminderStep("scheduled task list", RefreshScheduledTaskSnapshot);
+                await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

@@ -71,11 +71,48 @@ public partial class BotService
         }, $"interactionId={interaction.Id}");
     }
 
-    private async Task HandleSlashCommand(SocketSlashCommand command)
+    /// <summary>Every slash command name, so a DM of just the name ("cat" or "/cat") can run it.</summary>
+    private static IEnumerable<string> SlashCommandNames =>
+        new[] { SummonCommandName, LeaveCommandName, MacroCommandName, RxpCommandName, CatCommandName }
+            .Concat(TextCommands.All.Select(textCommand => textCommand.Name));
+
+    private Task HandleSlashCommand(SocketSlashCommand command) => RunSlashCommand(new SlashCommandInvocation(command));
+
+    // A DM whose whole text is a slash command's name runs it as if it were used with /. "commands" or "help"
+    // lists what this user can run, including their keyword commands.
+    private async Task<bool> TryHandleDmSlashCommand(SocketMessage message)
+    {
+        var name = message.Content.Trim().TrimStart('/').Trim().ToLowerInvariant();
+        if (name is "commands" or "help")
+        {
+            var lines = new List<string>
+            {
+                "**Commands** (send just the word here, or use / in a server):",
+                string.Join(", ", SlashCommandNames.Select(n => $"`{n}`")),
+            };
+            var keywordCommands = BotCommandsFor(message.Author.Id);
+            if (keywordCommands.Count > 0)
+            {
+                lines.Add("**You can also run:**");
+                lines.AddRange(keywordCommands.Select(c => $"`{c.Keyword}` · {c.Name}"));
+            }
+            lines.Add("-# Log water by sending an amount like `500ml`.");
+            await message.Channel.SendMessageAsync(string.Join('\n', lines));
+            return true;
+        }
+
+        if (!SlashCommandNames.Contains(name))
+            return false;
+        LogInfo($"DM command '{name}' from {message.Author.Username} ({message.Author.Id})");
+        await RunSlashCommand(new DmCommandInvocation(message, name));
+        return true;
+    }
+
+    private async Task RunSlashCommand(CommandInvocation command)
     {
         await RunLoggedAsync(async () =>
         {
-            switch (command.Data.Name)
+            switch (command.Name)
             {
                 case SummonCommandName:
                     await HandleSummonCommand(command);
@@ -93,41 +130,38 @@ public partial class BotService
                     await HandleCatCommand(command);
                     break;
                 default:
-                    if (TextCommands.Find(command.Data.Name) is { } textCommand)
+                    if (TextCommands.Find(command.Name) is { } textCommand)
                         await HandleTextCommand(command, textCommand);
                     break;
             }
-        }, $"command={command.Data.Name}");
+        }, $"command={command.Name}");
     }
 
-    private async Task HandleSummonCommand(SocketSlashCommand command)
+    // In a server: the user's voice channel there. In a DM: whichever voice channel they're in, in any server the bot shares.
+    private SocketVoiceChannel? FindUserVoiceChannel(CommandInvocation command)
+    {
+        if (command.GuildId is { } guildId)
+            return _discordBotClient.GetGuild(guildId)?.GetUser(command.User.Id)?.VoiceChannel;
+        return _discordBotClient.Guilds.Select(g => g.GetUser(command.User.Id)?.VoiceChannel).FirstOrDefault(v => v is not null);
+    }
+
+    private async Task HandleSummonCommand(CommandInvocation command)
     {
         await RunLoggedAsync(async () =>
         {
-            if (command.GuildId is null || command.Channel is not SocketGuildChannel guildChannel)
-            {
-                await RespondToCommandAsync(command, "`/summon` only works inside a server.");
-                return;
-            }
-
-            if (command.User is not SocketGuildUser guildUser)
-            {
-                await RespondToCommandAsync(command, "I couldn't resolve your server member state.");
-                return;
-            }
-
-            var voiceChannel = guildUser.VoiceChannel;
+            var voiceChannel = FindUserVoiceChannel(command);
             if (voiceChannel == null)
             {
-                await RespondToCommandAsync(command, "Join a voice channel first, then use `/summon`.");
+                await command.ReplyAsync("Join a voice channel first, then use `/summon`.", ephemeral: true);
                 return;
             }
 
-            var guildId = guildChannel.Guild.Id;
-            var currentVoiceChannel = guildChannel.Guild.CurrentUser?.VoiceChannel;
+            var guild = voiceChannel.Guild;
+            var guildId = guild.Id;
+            var currentVoiceChannel = guild.CurrentUser?.VoiceChannel;
             if (currentVoiceChannel?.Id == voiceChannel.Id && _voiceConnections.ContainsKey(guildId))
             {
-                await RespondToCommandAsync(command, $"I'm already in **{voiceChannel.Name}**.");
+                await command.ReplyAsync($"I'm already in **{voiceChannel.Name}**.", ephemeral: true);
                 return;
             }
 
@@ -137,60 +171,50 @@ public partial class BotService
 
                 if (AppSettings.DryRun)
                 {
-                    LogInfo($"[DRY RUN] Would join voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guildChannel.Guild.Name}");
-                    await RespondToCommandAsync(command, $"[Dry run] I'd join **{voiceChannel.Name}** and stay there until `/leave`.");
+                    LogInfo($"[DRY RUN] Would join voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guild.Name}");
+                    await command.ReplyAsync($"[Dry run] I'd join **{voiceChannel.Name}** and stay there until `/leave`.", ephemeral: true);
                     return;
                 }
 
                 await ConnectToGuildVoiceChannel(guildId, voiceChannel);
 
-                LogInfo($"Joined voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guildChannel.Guild.Name}");
-                await RespondToCommandAsync(command, $"Joined **{voiceChannel.Name}**. I'll stay here until `/leave` is used.");
+                LogInfo($"Joined voice channel {voiceChannel.Name} ({voiceChannel.Id}) in guild {guild.Name}");
+                await command.ReplyAsync($"Joined **{voiceChannel.Name}**. I'll stay here until `/leave` is used.", ephemeral: true);
             }
             catch (Exception ex)
             {
                 LogException(ex, $"guildId={guildId}, voiceChannelId={voiceChannel.Id}");
                 LogError($"Failed to join voice channel {voiceChannel.Id} in guild {guildId}: {ex}");
-                await RespondToCommandAsync(command, "I couldn't join that voice channel. I may be missing permission to view or connect to it.");
+                await command.ReplyAsync("I couldn't join that voice channel. I may be missing permission to view or connect to it.", ephemeral: true);
             }
-        }, $"command={command.Data.Name}, guildId={command.GuildId}");
+        }, $"command={command.Name}, guildId={command.GuildId}");
     }
 
-    private async Task HandleLeaveCommand(SocketSlashCommand command)
+    private async Task HandleLeaveCommand(CommandInvocation command)
     {
         await RunLoggedAsync(async () =>
         {
-            if (command.GuildId is null || command.Channel is not SocketGuildChannel guildChannel)
-            {
-                await command.RespondAsync("`/leave` only works inside a server.", ephemeral: true);
-                return;
-            }
+            // From a DM: the server where the bot shares a voice channel with the user, else the only one it's in.
+            var guild = command.GuildId is { } guildId
+                ? _discordBotClient.GetGuild(guildId)
+                : FindUserVoiceChannel(command) is { } userChannel && userChannel.Guild.CurrentUser?.VoiceChannel?.Id == userChannel.Id
+                    ? userChannel.Guild
+                    : _discordBotClient.Guilds.Where(g => _voiceConnections.ContainsKey(g.Id) || g.CurrentUser?.VoiceChannel != null).ToList() is [var only]
+                        ? only
+                        : null;
 
-            var guild = guildChannel.Guild;
-            var currentVoiceChannel = guild.CurrentUser?.VoiceChannel;
-            if (!_voiceConnections.ContainsKey(guild.Id) && currentVoiceChannel == null)
+            if (guild == null || (!_voiceConnections.ContainsKey(guild.Id) && guild.CurrentUser?.VoiceChannel == null))
             {
-                await command.RespondAsync("I'm not in a voice channel right now.", ephemeral: true);
+                await command.ReplyAsync(command.GuildId is null
+                    ? "I'm not in a voice channel with you. Join mine, or use `/leave` in that server."
+                    : "I'm not in a voice channel right now.", ephemeral: true);
                 return;
             }
 
             await DisconnectFromGuildVoice(guild.Id);
             LogInfo($"Left voice channel for guild {guild.Name} ({guild.Id})");
-            await command.RespondAsync("Left the voice channel.", ephemeral: true);
-        }, $"command={command.Data.Name}, guildId={command.GuildId}");
-    }
-
-    private static Task RespondToCommandAsync(SocketSlashCommand command, string message)
-    {
-        if (command.HasResponded)
-        {
-            return command.ModifyOriginalResponseAsync(properties =>
-            {
-                properties.Content = message;
-            });
-        }
-
-        return command.RespondAsync(message, ephemeral: true);
+            await command.ReplyAsync("Left the voice channel.", ephemeral: true);
+        }, $"command={command.Name}, guildId={command.GuildId}");
     }
 
     private async Task DisconnectFromGuildVoice(ulong guildId)

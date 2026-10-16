@@ -46,7 +46,7 @@ public partial class BotService : BackgroundService
     private readonly IProgressRepository _progressRepository;
     private readonly IProgressCheckInRepository _progressCheckInRepository;
     private readonly IDiscordUserRepository _discordUserRepository;
-    private readonly IGameServerRepository _gameServerRepository;
+    private readonly IBotCommandRepository _botCommandRepository;
     private readonly IWaterRepository _waterRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
@@ -84,7 +84,7 @@ public partial class BotService : BackgroundService
         IProgressRepository progressRepository,
         IProgressCheckInRepository progressCheckInRepository,
         IDiscordUserRepository discordUserRepository,
-        IGameServerRepository gameServerRepository,
+        IBotCommandRepository botCommandRepository,
         IWaterRepository waterRepository,
         DiscordSocketClient discordBotClient)
     {
@@ -114,7 +114,7 @@ public partial class BotService : BackgroundService
         _progressRepository = progressRepository;
         _progressCheckInRepository = progressCheckInRepository;
         _discordUserRepository = discordUserRepository;
-        _gameServerRepository = gameServerRepository;
+        _botCommandRepository = botCommandRepository;
         _waterRepository = waterRepository;
         _discordBotClient    = discordBotClient;
     }
@@ -141,7 +141,7 @@ public partial class BotService : BackgroundService
         _goalRepository.EnsureTables();
         _progressRepository.EnsureTable();
         _progressCheckInRepository.EnsureTable();
-        _gameServerRepository.EnsureTables();
+        _botCommandRepository.EnsureTables();
         _waterRepository.EnsureTables();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();

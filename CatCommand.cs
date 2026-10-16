@@ -97,7 +97,7 @@ public partial class BotService
     // Deferred because fetching the cat can take longer than Discord's 3-second response window.
     // The image is uploaded as an attachment rather than embedded by URL, because Discord's embed
     // proxy intermittently fails to load TheCatAPI's CDN and leaves an empty embed.
-    private async Task HandleCatCommand(SocketSlashCommand command)
+    private async Task HandleCatCommand(CommandInvocation command)
     {
         await RunLoggedAsync(async () =>
         {
@@ -111,11 +111,11 @@ public partial class BotService
                     continue;
 
                 using var stream = new MemoryStream(cat.Bytes);
-                await command.FollowupWithFileAsync(stream, cat.FileName);
+                await command.ReplyWithFileAsync(stream, cat.FileName);
                 return;
             }
 
-            await command.FollowupAsync("Couldn't find a cat right now. Try again in a bit.");
-        }, $"command={command.Data.Name}, guildId={command.GuildId}");
+            await command.ReplyAsync("Couldn't find a cat right now. Try again in a bit.");
+        }, $"command={command.Name}, guildId={command.GuildId}");
     }
 }
