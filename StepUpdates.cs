@@ -23,7 +23,7 @@ public partial class BotService
             var settings = state.Settings;
             var creds = credentials.First(c => string.Equals(c.Username, settings.FitnessUsername, StringComparison.OrdinalIgnoreCase));
 
-            var steps = await new GoogleHealthClient(creds).TryGetStepCountSince(nowLocal.Date);
+            var steps = await new GoogleHealthClient(creds).TryGetStepCountForDay(DateOnly.FromDateTime(nowLocal));
             if (steps is not { } count)
             {
                 // Skip this hour rather than report zero; try again next hour.

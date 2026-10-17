@@ -50,6 +50,8 @@ public partial class BotService : BackgroundService
     private readonly IWaterRepository _waterRepository;
     private readonly IBotActivityRepository _botActivityRepository;
     private readonly IStepUpdateRepository _stepUpdateRepository;
+    private readonly IFitnessHistoryRepository _fitnessHistoryRepository;
+    private readonly IHard75Repository _hard75Repository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
     private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
@@ -90,6 +92,8 @@ public partial class BotService : BackgroundService
         IWaterRepository waterRepository,
         IBotActivityRepository botActivityRepository,
         IStepUpdateRepository stepUpdateRepository,
+        IFitnessHistoryRepository fitnessHistoryRepository,
+        IHard75Repository hard75Repository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -122,6 +126,8 @@ public partial class BotService : BackgroundService
         _waterRepository = waterRepository;
         _botActivityRepository = botActivityRepository;
         _stepUpdateRepository = stepUpdateRepository;
+        _fitnessHistoryRepository = fitnessHistoryRepository;
+        _hard75Repository = hard75Repository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -151,6 +157,8 @@ public partial class BotService : BackgroundService
         _waterRepository.EnsureTables();
         _botActivityRepository.EnsureTables();
         _stepUpdateRepository.EnsureTable();
+        _fitnessHistoryRepository.EnsureTable();
+        _hard75Repository.EnsureTables();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _autoReactionRules = _autoReactionRepository.GetAll();

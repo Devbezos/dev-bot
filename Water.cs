@@ -33,6 +33,7 @@ public partial class BotService
 
         var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, text);
         var total = _waterRepository.GetTotal(userId, today);
+        await TickHard75WaterIfReached(userId, DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture), total);
         var components = new ComponentBuilder()
             .WithButton("Undo", $"{WaterUndoPrefix}{entryId}", ButtonStyle.Secondary, new Emoji("↩️"))
             .Build();
@@ -57,8 +58,8 @@ public partial class BotService
             if (!WaterRules.ShouldRemind(state.Settings, nowLocal, ToLocal(state.LastEntryUtc), ToLocal(state.LastRemindedUtc), state.TodayTotalMl))
                 continue;
 
-            // Marked first so a failing DM isn't retried every tick.
-            _waterRepository.MarkReminded(state.UserId, nowUtc);
+            // Marked first so a failing DM isn't retried every tick; the previous reminder stays recorded until replaced.
+            _waterRepository.MarkReminded(state.UserId, nowUtc, state.LastReminderMessage);
             var text = $"💧 Time for some water! It's been a while since your last drink.\nToday: {DescribeWaterTotal(state.TodayTotalMl, state.Settings)}\n" +
                        "-# Tap a button or send an amount like `500ml`.";
             if (AppSettings.DryRun)
@@ -75,7 +76,11 @@ public partial class BotService
                     LogWarn($"Water reminder: Discord user {state.UserId} not found");
                     continue;
                 }
-                await dm.SendMessageAsync(text, components: BuildWaterQuickAddButtons(state.Settings.Unit));
+                // New reminder first, then delete the previous one so only the latest shows.
+                var message = await dm.SendMessageAsync(text, components: BuildWaterQuickAddButtons(state.Settings.Unit));
+                _waterRepository.MarkReminded(state.UserId, nowUtc, $"{dm.Id}/{message.Id}");
+                if (state.LastReminderMessage is { } previous)
+                    await DeleteDiscordMessages([previous]);
             }
             catch (Exception ex)
             {
@@ -104,10 +109,13 @@ public partial class BotService
             return false;
 
         var userId = component.User.Id;
+        // This reminder becomes the "Logged" confirmation, so the next reminder mustn't delete it.
+        _waterRepository.ClearReminderMessage(userId, $"{component.Channel.Id}/{component.Message.Id}");
         var today = DateOnly.FromDateTime(LifeLocalNow()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var settings = _waterRepository.GetSettings(userId);
         _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, $"button {WaterRules.Format(amountMl, settings.Unit)}");
         var total = _waterRepository.GetTotal(userId, today);
+        await TickHard75WaterIfReached(userId, DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture), total);
         await component.UpdateAsync(m =>
         {
             m.Content = $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}";

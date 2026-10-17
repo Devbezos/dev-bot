@@ -32,6 +32,9 @@ public partial class BotService
                 await RunReminderStep("progress check-in", ProcessProgressCheckIn);
                 await RunReminderStep("water reminders", ProcessWaterReminders);
                 await RunReminderStep("step updates", ProcessStepUpdates);
+                await RunReminderStep("fitness history", ProcessFitnessHistory);
+                await RunReminderStep("75 Hard", ProcessHard75);
+                await RunReminderStep("75 Hard workouts", ProcessHard75Workouts);
                 await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);
             }
         }
@@ -56,30 +59,55 @@ public partial class BotService
     }
 
     // Sends each due reminder, and re-sends it every RepeatEveryMinutes until the user presses Dismiss.
-    // Each re-send is a new DM so the phone notifies again.
+    // Each re-send is a new DM so the phone notifies again; the previous one is deleted so only the latest shows.
     private async Task ProcessReminders()
     {
         var nowUtc = DateTime.UtcNow;
         foreach (var reminder in _reminderRepository.GetDue(nowUtc).Where(r => ReminderSchedule.ShouldSend(r, nowUtc)))
         {
+            var previous = reminder.PendingMessages;
+            var previousJoined = previous.Count == 0 ? null : string.Join(',', previous);
             if (AppSettings.DryRun)
             {
                 LogInfo($"[DRY RUN] Reminder {reminder.Id} '{reminder.Title}' to {reminder.DiscordUserId}");
-                _reminderRepository.MarkSent(reminder.Id, nowUtc, null);
+                _reminderRepository.MarkSent(reminder.Id, nowUtc, previousJoined);
                 continue;
             }
 
             try
             {
+                // New DM first, then delete the old one, so a failed send never leaves no reminder at all.
                 var pending = await SendReminderDm(reminder);
-                _reminderRepository.MarkSent(reminder.Id, nowUtc, pending);
+                _reminderRepository.MarkSent(reminder.Id, nowUtc, pending ?? previousJoined);
+                if (pending != null)
+                    await DeleteDiscordMessages(previous);
             }
             catch (Exception ex)
             {
                 // Still mark it sent so a failing DM (user left, DMs closed) retries on the repeat interval, not every minute.
-                _reminderRepository.MarkSent(reminder.Id, nowUtc, null);
+                _reminderRepository.MarkSent(reminder.Id, nowUtc, previousJoined);
                 LogException(ex, $"reminderId={reminder.Id}");
                 LogWarn($"Reminder {reminder.Id} DM to {reminder.DiscordUserId} failed: {ex.Message}");
+            }
+        }
+    }
+
+    // Deletes the bot's own earlier DMs ("channelId/messageId" pairs), best effort: one already gone is skipped.
+    private async Task DeleteDiscordMessages(IEnumerable<string> messageRefs)
+    {
+        foreach (var entry in messageRefs)
+        {
+            var parts = entry.Split('/');
+            if (parts.Length != 2 || !ulong.TryParse(parts[0], out var channelId) || !ulong.TryParse(parts[1], out var messageId))
+                continue;
+            try
+            {
+                if (await _discordBotClient.GetChannelAsync(channelId) is IMessageChannel channel)
+                    await channel.DeleteMessageAsync(messageId);
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"Could not delete earlier reminder message {messageId}: {ex.Message}");
             }
         }
     }
