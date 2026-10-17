@@ -1,3 +1,4 @@
+using DevApi.Data;
 using DevClient.Clients;
 using DevClient.Clients.Fitness;
 using DevClient.Data;
@@ -931,7 +932,7 @@ public partial class BotService
                 {
                     if (!credsByUsername.TryGetValue(dbUser.Username, out var dailyCreds)) continue;
                     dailyCreds.ChannelId = dbUser.ChannelId;
-                    try { await new GoogleHealthClient(dailyCreds).PostDailyFitnessStats(); dailyPostedCount++; }
+                    try { await FitnessClients.Create(dailyCreds, _hevyRepository).PostDailyFitnessStats(); dailyPostedCount++; }
                     catch (Exception ex)
                     {
                         LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}");
@@ -951,7 +952,7 @@ public partial class BotService
                     weeklyCreds.ChannelId = dbUser.ChannelId;
                     try
                     {
-                        var healthClient = new GoogleHealthClient(weeklyCreds);
+                        var healthClient = FitnessClients.Create(weeklyCreds, _hevyRepository);
                         await healthClient.PostWeeklyFitnessStats();
                         weeklyPostedCount++;
 

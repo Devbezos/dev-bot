@@ -28,7 +28,7 @@ public partial class BotService
                 {
                     try
                     {
-                        var stored = await FitnessHistoryRecorder.RecordMissingAndRecent(user, _fitnessHistoryRepository, today);
+                        var stored = await FitnessHistoryRecorder.RecordMissingAndRecent(FitnessClients.Create(user, _hevyRepository), user.Username, _fitnessHistoryRepository, today);
                         LogInfo($"Fitness history: stored {stored} day(s) for {user.Username}");
                     }
                     catch (Exception ex)

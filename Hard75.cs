@@ -1,5 +1,4 @@
 using DevApi.Data;
-using DevClient.Clients.Fitness;
 using DevClient.Data;
 using Discord;
 using Discord.WebSocket;
@@ -110,50 +109,6 @@ public partial class BotService
         Hard75Rules.ReachedWaterGoal(todayTotalMl, _waterRepository.GetSettings(userId))
             ? TickHard75Task(userId, today, "water")
             : Task.CompletedTask;
-
-    private static readonly TimeSpan Hard75WorkoutCheckInterval = TimeSpan.FromMinutes(15);
-    private DateTime _hard75WorkoutCheckUtc = DateTime.MinValue;
-
-    // Every 15 minutes: anyone on a 75 Hard run with Workout 1 still open gets it ticked once Google Health has a
-    // lifting session tracked today on their fitness account (walks and cardio don't count).
-    private async Task ProcessHard75Workouts()
-    {
-        var nowUtc = DateTime.UtcNow;
-        if (nowUtc - _hard75WorkoutCheckUtc < Hard75WorkoutCheckInterval)
-            return;
-        _hard75WorkoutCheckUtc = nowUtc;
-
-        var today = DateOnly.FromDateTime(LifeLocalNow());
-        var date = Hard75Rules.Format(today);
-        List<GoogleHealthUserSettings>? credentials = null;
-        List<StepUpdateState>? stepUpdates = null;
-
-        foreach (var (settings, _) in _hard75Repository.GetAllSettings())
-        {
-            if (!settings.Enabled || Hard75Rules.DayNumber(settings, today) is not (>= 1 and <= Hard75Rules.TotalDays))
-                continue;
-            var userId = ulong.Parse(settings.DiscordUserId);
-            if (_hard75Repository.GetDay(userId, date)?.Completed.Contains("workout1") == true)
-                continue;
-
-            credentials ??= _fitnessRepository.GetGoogleHealthSettingsAll().Where(c => !string.IsNullOrEmpty(c.RefreshToken)).ToList();
-            stepUpdates ??= _stepUpdateRepository.GetAll(credentials.Select(c => c.Username));
-            var fitnessUsername = settings.FitnessUsername
-                ?? stepUpdates.FirstOrDefault(s => s.Settings.DiscordUserId == settings.DiscordUserId)?.Settings.FitnessUsername;
-            var creds = credentials.FirstOrDefault(c => string.Equals(c.Username, fitnessUsername, StringComparison.OrdinalIgnoreCase));
-            if (creds is null)
-                continue;
-
-            var lifts = (await new GoogleHealthClient(creds).GetDayExercises(today))
-                .Where(e => Hard75Rules.CountsAsWorkout1(e.Exercise.ExerciseType, e.Exercise.ActiveDuration))
-                .ToList();
-            if (lifts.Count > 0)
-            {
-                LogInfo($"75 Hard: ticking Workout 1 for {userId} from {lifts.Count} tracked lifting session(s)");
-                await TickHard75Task(userId, today, "workout1");
-            }
-        }
-    }
 
     // Marks a task done (never undone) for today and updates today's 75 Hard message to match.
     private async Task TickHard75Task(ulong userId, DateOnly today, string key)

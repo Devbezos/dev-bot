@@ -34,7 +34,7 @@ public partial class BotService
                 await RunReminderStep("step updates", ProcessStepUpdates);
                 await RunReminderStep("fitness history", ProcessFitnessHistory);
                 await RunReminderStep("75 Hard", ProcessHard75);
-                await RunReminderStep("75 Hard workouts", ProcessHard75Workouts);
+                await RunReminderStep("Hevy workouts", ProcessHevySync);
                 await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);
             }
         }
