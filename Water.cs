@@ -34,13 +34,54 @@ public partial class BotService
         var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, text);
         var total = _waterRepository.GetTotal(userId, today);
         await TickHard75WaterIfReached(userId, DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture), total);
-        var components = new ComponentBuilder()
-            .WithButton("Undo", $"{WaterUndoPrefix}{entryId}", ButtonStyle.Secondary, new Emoji("↩️"))
-            .Build();
-        await message.Channel.SendMessageAsync(
+        await ShowWaterMessage(userId, message.Channel,
             $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}",
-            components: components);
+            BuildWaterButtons(settings.Unit, entryId));
         return true;
+    }
+
+    // Updates today's water message (the latest reminder or "Logged" message) in place instead of posting another;
+    // bots can't delete the user's own DM, so their typed amount stays. Posts a new one when there's none from today.
+    private async Task ShowWaterMessage(ulong userId, IMessageChannel channel, string content, MessageComponent components)
+    {
+        if (_waterRepository.GetWaterMessage(userId) is { } reference && await TryGetTodaysWaterMessage(reference, channel) is { } existing)
+        {
+            try
+            {
+                await existing.ModifyAsync(m =>
+                {
+                    m.Content = content;
+                    m.Components = components;
+                });
+                return;
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"Could not update water message {existing.Id}: {ex.Message}");
+            }
+        }
+
+        var sent = await channel.SendMessageAsync(content, components: components);
+        _waterRepository.SetWaterMessage(userId, $"{channel.Id}/{sent.Id}");
+    }
+
+    private async Task<IUserMessage?> TryGetTodaysWaterMessage(string reference, IMessageChannel channel)
+    {
+        var parts = reference.Split('/');
+        if (parts.Length != 2 || parts[0] != channel.Id.ToString(CultureInfo.InvariantCulture) || !ulong.TryParse(parts[1], out var messageId))
+            return null;
+        var sentLocal = TimeZoneInfo.ConvertTime(SnowflakeUtils.FromSnowflake(messageId), ReminderSchedule.FindTimeZone(LifeTimeZone));
+        if (DateOnly.FromDateTime(sentLocal.DateTime) != DateOnly.FromDateTime(LifeLocalNow()))
+            return null;
+        try
+        {
+            return await channel.GetMessageAsync(messageId) as IUserMessage;
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not fetch water message {messageId}: {ex.Message}");
+            return null;
+        }
     }
 
     // DMs anyone with reminders on who hasn't logged water for their interval (only during their active hours,
@@ -77,7 +118,7 @@ public partial class BotService
                     continue;
                 }
                 // New reminder first, then delete the previous one so only the latest shows.
-                var message = await dm.SendMessageAsync(text, components: BuildWaterQuickAddButtons(state.Settings.Unit));
+                var message = await dm.SendMessageAsync(text, components: BuildWaterButtons(state.Settings.Unit));
                 _waterRepository.MarkReminded(state.UserId, nowUtc, $"{dm.Id}/{message.Id}");
                 if (state.LastReminderMessage is { } previous)
                     await DeleteDiscordMessages([previous]);
@@ -89,18 +130,21 @@ public partial class BotService
         }
     }
 
-    private static MessageComponent BuildWaterQuickAddButtons(string unit)
+    // Quick-add buttons, plus Undo for the entry just logged.
+    private static MessageComponent BuildWaterButtons(string unit, int? undoEntryId = null)
     {
         var amounts = unit == "oz"
             ? new[] { ("8 oz", 8 * WaterRules.MlPerOz), ("16 oz", 16 * WaterRules.MlPerOz), ("32 oz", 32 * WaterRules.MlPerOz) }
             : new[] { ("250 ml", 250m), ("500 ml", 500m), ("1 L", 1000m) };
         var builder = new ComponentBuilder();
+        if (undoEntryId is { } entryId)
+            builder.WithButton("Undo", $"{WaterUndoPrefix}{entryId}", ButtonStyle.Secondary, new Emoji("↩️"));
         foreach (var (label, ml) in amounts)
             builder.WithButton($"+{label}", $"{WaterAddPrefix}{Math.Round(ml, 1).ToString(CultureInfo.InvariantCulture)}", ButtonStyle.Primary, new Emoji("💧"));
         return builder.Build();
     }
 
-    // A quick-add button on a reminder: logs that amount and answers like a typed amount would.
+    // A quick-add button on the water message: logs that amount and turns the message into the "Logged" one.
     private async Task<bool> TryHandleWaterAddButton(SocketMessageComponent component)
     {
         if (!component.Data.CustomId.StartsWith(WaterAddPrefix, StringComparison.Ordinal)
@@ -109,17 +153,17 @@ public partial class BotService
             return false;
 
         var userId = component.User.Id;
-        // This reminder becomes the "Logged" confirmation, so the next reminder mustn't delete it.
-        _waterRepository.ClearReminderMessage(userId, $"{component.Channel.Id}/{component.Message.Id}");
+        // Later typed amounts edit this message too, until the next reminder replaces it.
+        _waterRepository.SetWaterMessage(userId, $"{component.Channel.Id}/{component.Message.Id}");
         var today = DateOnly.FromDateTime(LifeLocalNow()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var settings = _waterRepository.GetSettings(userId);
-        _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, $"button {WaterRules.Format(amountMl, settings.Unit)}");
+        var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, $"button {WaterRules.Format(amountMl, settings.Unit)}");
         var total = _waterRepository.GetTotal(userId, today);
         await TickHard75WaterIfReached(userId, DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture), total);
         await component.UpdateAsync(m =>
         {
             m.Content = $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}";
-            m.Components = new ComponentBuilder().Build();
+            m.Components = BuildWaterButtons(settings.Unit, entryId);
         });
         return true;
     }
@@ -162,7 +206,7 @@ public partial class BotService
         await component.UpdateAsync(m =>
         {
             m.Content = $"~~💧 Logged {WaterRules.Format(entry.AmountMl, settings.Unit)}~~ (undone)\nToday: {DescribeWaterTotal(total, settings)}";
-            m.Components = new ComponentBuilder().Build();
+            m.Components = BuildWaterButtons(settings.Unit);
         });
         return true;
     }

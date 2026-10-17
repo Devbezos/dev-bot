@@ -176,61 +176,20 @@ public partial class BotService
         if (!ReminderSchedule.TryParseDismissButtonId(component.Data.CustomId, out var reminderId, out var dueTicks))
             return;
 
+        // Dismissing deletes the reminder DM (and any earlier nags for it), so nothing is left behind.
+        await component.DeferAsync();
+        var toDelete = new List<string> { $"{component.Channel.Id}/{component.Message.Id}" };
+
         var reminder = _reminderRepository.Get(reminderId);
-        if (reminder is null)
+        if (reminder is not null)
         {
-            await component.UpdateAsync(m => { m.Content = "This reminder was deleted."; m.Components = new ComponentBuilder().Build(); });
-            return;
+            var dueUtc = new DateTime(dueTicks, DateTimeKind.Utc);
+            var nextDueUtc = reminder.ScheduleKind == "once" ? null : ReminderSchedule.NextDueUtc(reminder, DateTime.UtcNow);
+            // Only dismisses if this button belongs to the current occurrence; stale buttons just get cleaned up.
+            if (reminder.NextDueUtc == dueUtc && _reminderRepository.Dismiss(reminderId, dueUtc, nextDueUtc))
+                toDelete.AddRange(reminder.PendingMessages);
         }
 
-        var dueUtc = new DateTime(dueTicks, DateTimeKind.Utc);
-        var pendingMessages = reminder.PendingMessages;
-        var nextDueUtc = reminder.ScheduleKind == "once" ? null : ReminderSchedule.NextDueUtc(reminder, DateTime.UtcNow);
-
-        // Only dismisses if this button belongs to the current occurrence; stale buttons just get cleaned up.
-        var dismissed = reminder.NextDueUtc == dueUtc && _reminderRepository.Dismiss(reminderId, dueUtc, nextDueUtc);
-        var status = dismissed
-            ? nextDueUtc is { } next ? $"Dismissed. Next reminder <t:{new DateTimeOffset(next).ToUnixTimeSeconds()}:R>." : "Dismissed. This was a one-time reminder."
-            : "Already dismissed.";
-
-        await component.UpdateAsync(m =>
-        {
-            m.Content = $"~~**Reminder: {reminder.Title}**~~\n-# {status}";
-            m.Components = new ComponentBuilder().Build();
-        });
-
-        if (dismissed)
-            await RemoveReminderButtons(pendingMessages, component.Message.Id, reminder.Title);
-    }
-
-    // Strips the Dismiss button from this occurrence's earlier nag DMs (best effort).
-    private async Task RemoveReminderButtons(IEnumerable<string> pendingMessages, ulong alreadyUpdatedMessageId, string title)
-    {
-        foreach (var entry in pendingMessages)
-        {
-            var parts = entry.Split('/');
-            if (parts.Length != 2 || !ulong.TryParse(parts[0], out var channelId) || !ulong.TryParse(parts[1], out var messageId))
-                continue;
-            if (messageId == alreadyUpdatedMessageId)
-                continue;
-
-            try
-            {
-                if (await _discordBotClient.GetChannelAsync(channelId) is not IMessageChannel channel)
-                    continue;
-                if (await channel.GetMessageAsync(messageId) is IUserMessage message)
-                {
-                    await message.ModifyAsync(m =>
-                    {
-                        m.Content = $"~~**Reminder: {title}**~~\n-# Dismissed.";
-                        m.Components = new ComponentBuilder().Build();
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                LogWarn($"Could not clear reminder button on message {messageId}: {ex.Message}");
-            }
-        }
+        await DeleteDiscordMessages(toDelete.Distinct());
     }
 }

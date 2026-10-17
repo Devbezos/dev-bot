@@ -45,9 +45,15 @@ public partial class BotService
             {
                 var dm = await GetDmChannel(ulong.Parse(settings.DiscordUserId!));
                 if (dm is null)
+                {
                     LogWarn($"Step update: Discord user {settings.DiscordUserId} not found");
-                else
-                    await dm.SendMessageAsync(text);
+                    continue;
+                }
+                // New update first, then delete the previous one so only the latest shows.
+                var message = await dm.SendMessageAsync(text);
+                _stepUpdateRepository.SetLastMessage(settings.FitnessUsername, $"{dm.Id}/{message.Id}");
+                if (state.LastMessage is { } previous)
+                    await DeleteDiscordMessages([previous]);
             }
             catch (Exception ex)
             {
