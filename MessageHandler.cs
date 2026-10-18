@@ -72,6 +72,23 @@ public partial class BotService
         {
             if (isDm || mentionsBot)
                 LogMessageToBot(message, handledAs);
+            if (isDm && handledAs != null)
+                await MarkDmProcessed(message);
+        }
+    }
+
+    // Reacts ✅ to a DM the bot acted on, so it's clear the message went through.
+    private async Task MarkDmProcessed(SocketMessage message)
+    {
+        if (AppSettings.DryRun)
+            return;
+        try
+        {
+            await message.AddReactionAsync(new Emoji("✅"));
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not react to DM {message.Id}: {ex.Message}");
         }
     }
 
