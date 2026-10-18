@@ -18,7 +18,7 @@ public partial class BotService
     // Latest archive kept on disk so /rxp can send it without redownloading. Holds exactly one file.
     private static string RxpGuidesStoreDirectory => Path.Combine(AppContext.BaseDirectory, "data", "rxpguides");
 
-    // Daily: read the first post of the RXPGuides OwnedCore thread, follow its f2h.io link,
+    // Every 3 hours by default (the rxp_guides_watch job): read the first post of the RXPGuides OwnedCore thread, follow its f2h.io link,
     // download and hash the archive, keep it as the stored copy, and when the hash changes post
     // it to the configured channel, pin that post and unpin the previous one. Settings and
     // last-seen state live in the rxp_guides_watch table (edited from the Schedule page).
