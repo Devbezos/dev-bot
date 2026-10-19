@@ -80,6 +80,24 @@ public class RxpGuidesWatchTests
         Assert.Contains("`RXPGuides.rar` (0.00 MB)", message);
     }
 
+    [Fact]
+    public void IsRxpGuidesUpdatePost_MatchesBothUpdateWordingsButNotOtherMessages()
+    {
+        var archive = new RxpGuidesArchive("RXPGuides.rar", "abc", 1024, "unused");
+
+        Assert.True(IsUpdatePost(BuildMessage(firstSeen: true, archive)));
+        Assert.True(IsUpdatePost(BuildMessage(firstSeen: false, archive)));
+        Assert.False(IsUpdatePost("**Latest RXPGuides:** `RXPGuides.rar` (0.00 MB)"));
+        Assert.False(IsUpdatePost("RXPGuides is great"));
+        Assert.False(IsUpdatePost(null));
+    }
+
+    private static bool IsUpdatePost(string? content)
+    {
+        var method = typeof(BotService).GetMethod("IsRxpGuidesUpdatePost", BindingFlags.NonPublic | BindingFlags.Static);
+        return (bool)method!.Invoke(null, [content])!;
+    }
+
     private static string BuildMessage(bool firstSeen, RxpGuidesArchive archive)
     {
         var method = typeof(BotService).GetMethod("BuildRxpGuidesUpdateMessage", BindingFlags.NonPublic | BindingFlags.Static);

@@ -1,5 +1,6 @@
 using DevClient.Clients;
 using DevClient.Data;
+using Discord;
 using Discord.WebSocket;
 
 public partial class BotService
@@ -87,6 +88,8 @@ public partial class BotService
             _rxpGuidesWatchRepository.RecordChanged(fetched.F2hUrl!, archive.FileName, archive.Sha256, archive.SizeBytes, fetched.Post?.Text, checkedAt);
 
             var pinWarning = messageId == 0 ? null : await ReplaceRxpGuidesPin(watch, messageId);
+            if (messageId != 0)
+                await DeletePreviousRxpGuidesPosts(watch, messageId);
             var combinedWarning = string.Join("; ", new[] { warning, pinWarning }.Where(w => w != null));
             if (combinedWarning.Length > 0)
                 _rxpGuidesWatchRepository.RecordChecked(checkedAt, combinedWarning);
@@ -207,6 +210,53 @@ public partial class BotService
 
         return warnings.Count == 0 ? null : string.Join("; ", warnings);
     }
+
+    // Deletes the bot's earlier update posts so only the newest one stays in the channel: the
+    // tracked pinned post (even if it has scrolled out of recent history or the channel changed)
+    // plus any of the bot's own update posts among the channel's recent messages. Best effort.
+    private async Task DeletePreviousRxpGuidesPosts(RxpGuidesWatch watch, ulong keepMessageId)
+    {
+        var toDelete = new HashSet<(ulong ChannelId, ulong MessageId)>();
+        if (watch.PinnedChannelId != 0 && watch.PinnedMessageId != 0 && watch.PinnedMessageId != keepMessageId)
+            toDelete.Add((watch.PinnedChannelId, watch.PinnedMessageId));
+
+        var botUserId = _discordBotClient.CurrentUser?.Id;
+        if (botUserId != null && _discordBotClient.GetChannel(watch.ChannelId) is IMessageChannel channel)
+        {
+            try
+            {
+                var recent = await channel.GetMessagesAsync(limit: 100).FlattenAsync();
+                foreach (var message in recent)
+                    if (message.Id != keepMessageId && message.Author?.Id == botUserId && IsRxpGuidesUpdatePost(message.Content))
+                        toDelete.Add((watch.ChannelId, message.Id));
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"Could not read channel {watch.ChannelId} to find earlier RXPGuides posts: {ex.Message}");
+            }
+        }
+
+        foreach (var (channelId, messageId) in toDelete)
+        {
+            try
+            {
+                if (await _discordBotClient.GetChannelAsync(channelId) is IMessageChannel target)
+                {
+                    await target.DeleteMessageAsync(messageId);
+                    LogInfo($"Deleted earlier RXPGuides post {messageId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Usually already deleted by hand.
+                LogWarn($"Could not delete earlier RXPGuides post {messageId}: {ex.Message}");
+            }
+        }
+    }
+
+    // Matches the channel update posts from BuildRxpGuidesUpdateMessage, not the /rxp DM text.
+    private static bool IsRxpGuidesUpdatePost(string? content) =>
+        content != null && content.StartsWith("**RXPGuides ", StringComparison.Ordinal);
 
     private void TryDeleteDirectory(string directory)
     {
