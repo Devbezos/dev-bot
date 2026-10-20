@@ -32,6 +32,8 @@ public partial class BotService
                 await RunReminderStep("progress check-in", ProcessProgressCheckIn);
                 await RunReminderStep("water reminders", ProcessWaterReminders);
                 await RunReminderStep("step updates", ProcessStepUpdates);
+                await RunReminderStep("calendar reminders", ProcessCalendarReminders);
+                await RunReminderStep("Discord directory", ProcessDiscordDirectory);
                 await RunReminderStep("Hevy workouts", ProcessHevySync);
                 await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);
             }
@@ -150,9 +152,12 @@ public partial class BotService
         }
 
         var dm = await user.CreateDMChannelAsync();
-        var components = new ComponentBuilder()
-            .WithButton("Dismiss", ReminderSchedule.DismissButtonId(reminder.Id, reminder.NextDueUtc!.Value), ButtonStyle.Success)
-            .Build();
+        var buttons = new ComponentBuilder()
+            .WithButton("Dismiss", ReminderSchedule.DismissButtonId(reminder.Id, reminder.NextDueUtc!.Value), ButtonStyle.Success);
+        // One-time reminders can be pushed back instead; recurring ones just wait for their next occurrence.
+        if (reminder.ScheduleKind == "once")
+            buttons.WithButton("Reschedule", ReminderTimeText.RescheduleButtonId(reminder.Id, reminder.NextDueUtc.Value), ButtonStyle.Secondary, new Emoji("🕒"));
+        var components = buttons.Build();
         var message = await dm.SendMessageAsync(BuildReminderText(reminder), components: components);
         return $"{dm.Id}/{message.Id}";
     }

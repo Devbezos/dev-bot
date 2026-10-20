@@ -15,7 +15,7 @@ public partial class BotService
     private async Task ProcessProgressCheckIn()
     {
         var nowLocal = LifeLocalNow();
-        var date = DateOnly.FromDateTime(nowLocal).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var date = LifeClock.Key(DateOnly.FromDateTime(nowLocal));
         var state = _progressRepository.Get();
         if (!ProgressCheckInRules.IsDue(state.CheckIn, nowLocal, _progressCheckInRepository.AnyForDate(date)))
             return;
@@ -48,7 +48,7 @@ public partial class BotService
         }
 
         await dm.SendMessageAsync(
-            $"📋 **Daily check-in · {DateOnly.ParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture).ToString("dddd, MMM d", CultureInfo.InvariantCulture)}**\n" +
+            $"📋 **Daily check-in · {DateOnly.FromDateTime(nowLocal).ToString("dddd, MMM d", CultureInfo.InvariantCulture)}**\n" +
             "-# Tap ✅ or ❌ for each one. For numbers like steps, reply with the amount (replying to the question picks which one).");
         foreach (var item in items)
         {
@@ -78,7 +78,7 @@ public partial class BotService
         try
         {
             var s = await FitnessClients.Create(user, _hevyRepository).GetDaySnapshot(day, sleepWakeDate: day);
-            await SaveAutoHabits([(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), AutoHabitStats.From(s.Steps, s.SleepHours, s.CaloriesEaten, s.Activities))]);
+            await SaveAutoHabits([(LifeClock.Key(day), AutoHabitStats.From(s.Steps, s.SleepHours, s.CaloriesEaten, s.Activities))]);
         }
         catch (Exception ex)
         {
@@ -93,8 +93,8 @@ public partial class BotService
         if (!state.Habits.Any(ProgressAutoHabits.IsAuto) || !ulong.TryParse(state.CheckIn.DiscordUserId, out var userId) || FindFitnessUserFor(userId) is not { } user)
             return;
         var days = _fitnessHistoryRepository.Get(user.Username,
-            today.AddDays(-FitnessHistoryRecorder.RefreshRecentDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            LifeClock.Key(today.AddDays(-FitnessHistoryRecorder.RefreshRecentDays)),
+            LifeClock.Key(today));
         await SaveAutoHabits(days.Select(d => (d.Date, ProgressAutoHabits.StatsOf(d))));
     }
 

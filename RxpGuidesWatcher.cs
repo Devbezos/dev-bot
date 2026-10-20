@@ -28,9 +28,10 @@ public partial class BotService
         var watch = _rxpGuidesWatchRepository.Get();
         var checkedAt = DateTime.UtcNow;
 
-        if (watch.ChannelId == 0)
+        var channels = RxpGuidesTargetChannels(watch);
+        if (channels.Count == 0)
         {
-            LogWarn("RXPGuides watch channel is not configured; skipping check");
+            LogWarn("No guild has an RXPGuides channel set (and no fallback channel); skipping check");
             return;
         }
 
@@ -54,43 +55,55 @@ public partial class BotService
                 return;
             }
 
-            // Checked up front so the UI gets a clear reason instead of a raw Discord 413.
-            // The stored hash is left alone, so the file is posted once the limit allows it.
-            var uploadLimit = GetUploadLimitBytes(watch.ChannelId);
-            if (uploadLimit is { } limit && (ulong)archive.SizeBytes > limit)
+            // Each guild's channel gets its own post and pin. Problems in one channel don't stop the others.
+            var message = BuildRxpGuidesUpdateMessage(watch.Sha256 == null, archive);
+            var problems = new List<string>();
+            var posted = new List<(ulong ChannelId, ulong MessageId)>();
+            foreach (var channelId in channels)
             {
-                var error = $"{archive.FileName} is {FormatMegabytes(archive.SizeBytes)} but the server's upload limit is {FormatMegabytes((long)limit)}";
-                LogWarn($"RXPGuides update not posted: {error}");
-                _rxpGuidesWatchRepository.RecordChecked(checkedAt, error);
-                return;
+                // Checked up front so the UI gets a clear reason instead of a raw Discord 413.
+                if (GetUploadLimitBytes(channelId) is { } limit && (ulong)archive.SizeBytes > limit)
+                {
+                    problems.Add($"{RxpChannelName(channelId)}: {archive.FileName} is {FormatMegabytes(archive.SizeBytes)} but the server's upload limit is {FormatMegabytes((long)limit)}");
+                    continue;
+                }
+
+                await RxpGuidesArchiveLock.WaitAsync(cancellationToken);
+                try
+                {
+                    posted.Add((channelId, await _discordClient.PostFileToChannel(channelId, message, archive.FilePath)));
+                    LogInfo($"Posted RXPGuides update ({archive.FileName}) to channel {channelId}");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    LogError($"RXPGuides update post failed for channel {channelId}: {ex.Message}");
+                    problems.Add($"{RxpChannelName(channelId)}: Discord post failed: {ex.Message}");
+                }
+                finally
+                {
+                    RxpGuidesArchiveLock.Release();
+                }
             }
 
-            var message = BuildRxpGuidesUpdateMessage(watch.Sha256 == null, archive);
-            ulong messageId;
-            await RxpGuidesArchiveLock.WaitAsync(cancellationToken);
-            try
+            if (posted.Count == 0)
             {
-                messageId = await _discordClient.PostFileToChannel(watch.ChannelId, message, archive.FilePath);
-                LogInfo($"Posted RXPGuides update ({archive.FileName}) to channel {watch.ChannelId}");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // Leave the stored hash alone so the next run tries to post again.
-                LogError($"RXPGuides update post failed for channel {watch.ChannelId}: {ex.Message}");
-                _rxpGuidesWatchRepository.RecordChecked(checkedAt, $"Discord post failed: {ex.Message}");
+                // Nothing went out: leave the stored hash alone so the next run tries again.
+                LogWarn($"RXPGuides update not posted: {string.Join("; ", problems)}");
+                _rxpGuidesWatchRepository.RecordChecked(checkedAt, string.Join("; ", problems));
                 return;
-            }
-            finally
-            {
-                RxpGuidesArchiveLock.Release();
             }
 
             _rxpGuidesWatchRepository.RecordChanged(fetched.F2hUrl!, archive.FileName, archive.Sha256, archive.SizeBytes, fetched.Post?.Text, checkedAt);
 
-            var pinWarning = messageId == 0 ? null : await ReplaceRxpGuidesPin(watch, messageId);
-            if (messageId != 0)
-                await DeletePreviousRxpGuidesPosts(watch, messageId);
-            var combinedWarning = string.Join("; ", new[] { warning, pinWarning }.Where(w => w != null));
+            foreach (var (channelId, messageId) in posted.Where(p => p.MessageId != 0))
+            {
+                if (await PinRxpGuidesPost(channelId, messageId) is { } pinProblem)
+                    problems.Add($"{RxpChannelName(channelId)}: {pinProblem}");
+                await DeletePreviousRxpGuidesPosts(channelId, messageId);
+            }
+            await CleanUpTrackedRxpGuidesPost(watch, posted);
+
+            var combinedWarning = string.Join("; ", new[] { warning }.Concat(problems).Where(w => w != null));
             if (combinedWarning.Length > 0)
                 _rxpGuidesWatchRepository.RecordChecked(checkedAt, combinedWarning);
         }
@@ -175,82 +188,83 @@ public partial class BotService
             ? Directory.GetFiles(storeDirectory).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
             : null;
 
-    // Unpins the previously pinned update (first, so the channel never hits Discord's pin cap)
-    // and pins the new one. Returns a warning to surface in the UI, or null when both worked.
-    private async Task<string?> ReplaceRxpGuidesPin(RxpGuidesWatch watch, ulong newMessageId)
+    /// <summary>The key a guild's RXPGuides channel is saved under (Guilds → a guild → RXP Guides).</summary>
+    internal const string RxpGuidesChannelKey = "rxpGuides";
+
+    // Every guild's RXPGuides channel. Until any guild has one, the single channel set before per-guild channels existed.
+    private static List<ulong> RxpGuidesTargetChannels(RxpGuidesWatch watch)
     {
-        var warnings = new List<string>();
+        var channels = AppSettings.Guilds
+            .Select(g => g.Channels.GetValueOrDefault(RxpGuidesChannelKey))
+            .Where(id => id != 0)
+            .Distinct()
+            .ToList();
+        return channels.Count > 0 ? channels : watch.ChannelId != 0 ? [watch.ChannelId] : [];
+    }
 
-        if (watch.PinnedMessageId != 0 && watch.PinnedChannelId != 0)
-        {
-            try
-            {
-                await _discordClient.UnpinMessage(watch.PinnedChannelId, watch.PinnedMessageId);
-                LogInfo($"Unpinned previous RXPGuides post {watch.PinnedMessageId}");
-            }
-            catch (Exception ex)
-            {
-                // Usually the old post was deleted or unpinned by hand; nothing left to do.
-                LogWarn($"Could not unpin previous RXPGuides post {watch.PinnedMessageId}: {ex.Message}");
-            }
-        }
+    // "Guild name #channel" for warnings shown on the RXP Guides page.
+    private string RxpChannelName(ulong channelId) =>
+        _discordBotClient.GetChannel(channelId) is SocketGuildChannel c ? $"{c.Guild.Name} #{c.Name}" : $"channel {channelId}";
 
+    // Pins the new update post. Older posts are deleted right after (which drops their pins), so the channel never
+    // collects pins. Returns a warning for the UI, or null when it worked.
+    private async Task<string?> PinRxpGuidesPost(ulong channelId, ulong messageId)
+    {
         try
         {
-            await _discordClient.PinMessage(watch.ChannelId, newMessageId);
-            _rxpGuidesWatchRepository.RecordPinned(watch.ChannelId, newMessageId);
-            LogInfo($"Pinned RXPGuides post {newMessageId} in channel {watch.ChannelId}");
+            await _discordClient.PinMessage(channelId, messageId);
+            LogInfo($"Pinned RXPGuides post {messageId} in channel {channelId}");
+            return null;
         }
         catch (Exception ex)
         {
-            _rxpGuidesWatchRepository.RecordPinned(0, 0);
-            LogWarn($"Could not pin RXPGuides post {newMessageId}: {ex.Message}");
-            warnings.Add($"Posted but could not pin the message: {ex.Message}");
+            LogWarn($"Could not pin RXPGuides post {messageId}: {ex.Message}");
+            return $"posted but could not pin the message: {ex.Message}";
         }
-
-        return warnings.Count == 0 ? null : string.Join("; ", warnings);
     }
 
-    // Deletes the bot's earlier update posts so only the newest one stays in the channel: the
-    // tracked pinned post (even if it has scrolled out of recent history or the channel changed)
-    // plus any of the bot's own update posts among the channel's recent messages. Best effort.
-    private async Task DeletePreviousRxpGuidesPosts(RxpGuidesWatch watch, ulong keepMessageId)
+    // Deletes the bot's earlier update posts among the channel's recent messages, so only the newest stays. Best effort.
+    private async Task DeletePreviousRxpGuidesPosts(ulong channelId, ulong keepMessageId)
     {
-        var toDelete = new HashSet<(ulong ChannelId, ulong MessageId)>();
-        if (watch.PinnedChannelId != 0 && watch.PinnedMessageId != 0 && watch.PinnedMessageId != keepMessageId)
-            toDelete.Add((watch.PinnedChannelId, watch.PinnedMessageId));
-
         var botUserId = _discordBotClient.CurrentUser?.Id;
-        if (botUserId != null && _discordBotClient.GetChannel(watch.ChannelId) is IMessageChannel channel)
+        if (botUserId == null || _discordBotClient.GetChannel(channelId) is not IMessageChannel channel)
+            return;
+        try
         {
-            try
+            var recent = await channel.GetMessagesAsync(limit: 100).FlattenAsync();
+            foreach (var message in recent.Where(m => m.Id != keepMessageId && m.Author?.Id == botUserId && IsRxpGuidesUpdatePost(m.Content)))
+                await DeleteRxpGuidesPost(channelId, message.Id);
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not read channel {channelId} to find earlier RXPGuides posts: {ex.Message}");
+        }
+    }
+
+    // The post tracked from the last run may sit in a channel that's no longer posted to (or have scrolled out of the
+    // recent messages); delete it too, then track the first of this run's posts.
+    private async Task CleanUpTrackedRxpGuidesPost(RxpGuidesWatch watch, List<(ulong ChannelId, ulong MessageId)> posted)
+    {
+        if (watch.PinnedChannelId != 0 && watch.PinnedMessageId != 0 && !posted.Any(p => p.MessageId == watch.PinnedMessageId))
+            await DeleteRxpGuidesPost(watch.PinnedChannelId, watch.PinnedMessageId);
+        var first = posted.FirstOrDefault(p => p.MessageId != 0);
+        _rxpGuidesWatchRepository.RecordPinned(first.ChannelId, first.MessageId);
+    }
+
+    private async Task DeleteRxpGuidesPost(ulong channelId, ulong messageId)
+    {
+        try
+        {
+            if (await _discordBotClient.GetChannelAsync(channelId) is IMessageChannel target)
             {
-                var recent = await channel.GetMessagesAsync(limit: 100).FlattenAsync();
-                foreach (var message in recent)
-                    if (message.Id != keepMessageId && message.Author?.Id == botUserId && IsRxpGuidesUpdatePost(message.Content))
-                        toDelete.Add((watch.ChannelId, message.Id));
-            }
-            catch (Exception ex)
-            {
-                LogWarn($"Could not read channel {watch.ChannelId} to find earlier RXPGuides posts: {ex.Message}");
+                await target.DeleteMessageAsync(messageId);
+                LogInfo($"Deleted earlier RXPGuides post {messageId}");
             }
         }
-
-        foreach (var (channelId, messageId) in toDelete)
+        catch (Exception ex)
         {
-            try
-            {
-                if (await _discordBotClient.GetChannelAsync(channelId) is IMessageChannel target)
-                {
-                    await target.DeleteMessageAsync(messageId);
-                    LogInfo($"Deleted earlier RXPGuides post {messageId}");
-                }
-            }
-            catch (Exception ex)
-            {
-                // Usually already deleted by hand.
-                LogWarn($"Could not delete earlier RXPGuides post {messageId}: {ex.Message}");
-            }
+            // Usually already deleted by hand.
+            LogWarn($"Could not delete earlier RXPGuides post {messageId}: {ex.Message}");
         }
     }
 

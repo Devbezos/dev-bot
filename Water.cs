@@ -69,7 +69,7 @@ public partial class BotService
         var parts = reference.Split('/');
         if (parts.Length != 2 || parts[0] != channel.Id.ToString(CultureInfo.InvariantCulture) || !ulong.TryParse(parts[1], out var messageId))
             return null;
-        var sentLocal = TimeZoneInfo.ConvertTime(SnowflakeUtils.FromSnowflake(messageId), ReminderSchedule.FindTimeZone(LifeTimeZone));
+        var sentLocal = TimeZoneInfo.ConvertTime(SnowflakeUtils.FromSnowflake(messageId), LifeClock.Zone);
         if (DateOnly.FromDateTime(sentLocal.DateTime) != DateOnly.FromDateTime(LifeLocalNow()))
             return null;
         try
@@ -87,7 +87,7 @@ public partial class BotService
     // and not once today's goal is met).
     private async Task ProcessWaterReminders()
     {
-        var zone = ReminderSchedule.FindTimeZone(LifeTimeZone);
+        var zone = LifeClock.Zone;
         var nowUtc = DateTime.UtcNow;
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, zone);
         var today = DateOnly.FromDateTime(nowLocal).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

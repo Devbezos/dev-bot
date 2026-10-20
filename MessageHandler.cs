@@ -65,6 +65,7 @@ public partial class BotService
             if (await TryHandleBotCommand(message)) handledAs = "command";
             else if (isDm && await TryHandleDmSlashCommand(message)) handledAs = "slash";
             else if (isDm && await TryHandleWaterMessage(message)) handledAs = "water";
+            else if (isDm && await TryHandleReminderDm(message)) handledAs = "reminder";
             else if (isDm && await TryHandleProgressCheckInReply(message)) handledAs = "check-in";
             return handledAs != null;
         }

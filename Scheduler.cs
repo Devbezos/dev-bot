@@ -932,7 +932,7 @@ public partial class BotService
                 {
                     if (!credsByUsername.TryGetValue(dbUser.Username, out var dailyCreds)) continue;
                     dailyCreds.ChannelId = dbUser.ChannelId;
-                    try { await FitnessClients.Create(dailyCreds, _hevyRepository).PostDailyFitnessStats(); dailyPostedCount++; }
+                    try { await FitnessClients.Create(dailyCreds, _hevyRepository, _weightLossRepository.Get()).PostDailyFitnessStats(); dailyPostedCount++; }
                     catch (Exception ex)
                     {
                         LogError($"Fitness daily failed for {dbUser.Username}: {ex.Message}");

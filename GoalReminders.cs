@@ -6,10 +6,8 @@ using Discord;
 public partial class BotService
 {
     // Goals, the progress check-in and "missed" dates all use the owner's local time.
-    private const string LifeTimeZone = "America/Toronto";
 
-    private static DateTime LifeLocalNow() =>
-        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, ReminderSchedule.FindTimeZone(LifeTimeZone));
+    private static DateTime LifeLocalNow() => LifeClock.LocalNow;
 
     // DMs each goal on its reminder days (counting back from the target date), once per day.
     private async Task ProcessGoalReminders()

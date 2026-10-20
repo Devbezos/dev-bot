@@ -50,8 +50,12 @@ public partial class BotService : BackgroundService
     private readonly IWaterRepository _waterRepository;
     private readonly IBotActivityRepository _botActivityRepository;
     private readonly IStepUpdateRepository _stepUpdateRepository;
+    private readonly ICalendarReminderRepository _calendarReminderRepository;
+    private readonly IAccountRepository _accountRepository;
+    private readonly IDiscordDirectoryRepository _discordDirectoryRepository;
     private readonly IFitnessHistoryRepository _fitnessHistoryRepository;
     private readonly IHevyRepository _hevyRepository;
+    private readonly IWeightLossRepository _weightLossRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
     private DateTime _lastSchedulerNotReadyLogUtc = DateTime.MinValue;
@@ -92,8 +96,12 @@ public partial class BotService : BackgroundService
         IWaterRepository waterRepository,
         IBotActivityRepository botActivityRepository,
         IStepUpdateRepository stepUpdateRepository,
+        ICalendarReminderRepository calendarReminderRepository,
+        IAccountRepository accountRepository,
+        IDiscordDirectoryRepository discordDirectoryRepository,
         IFitnessHistoryRepository fitnessHistoryRepository,
         IHevyRepository hevyRepository,
+        IWeightLossRepository weightLossRepository,
         DiscordSocketClient discordBotClient)
     {
         _wowAuditClient      = wowAuditClient;
@@ -126,8 +134,12 @@ public partial class BotService : BackgroundService
         _waterRepository = waterRepository;
         _botActivityRepository = botActivityRepository;
         _stepUpdateRepository = stepUpdateRepository;
+        _calendarReminderRepository = calendarReminderRepository;
+        _accountRepository = accountRepository;
+        _discordDirectoryRepository = discordDirectoryRepository;
         _fitnessHistoryRepository = fitnessHistoryRepository;
         _hevyRepository = hevyRepository;
+        _weightLossRepository = weightLossRepository;
         _discordBotClient    = discordBotClient;
     }
 
@@ -157,6 +169,8 @@ public partial class BotService : BackgroundService
         _waterRepository.EnsureTables();
         _botActivityRepository.EnsureTables();
         _stepUpdateRepository.EnsureTable();
+        _calendarReminderRepository.EnsureTables();
+        _discordDirectoryRepository.EnsureTables();
         _fitnessHistoryRepository.EnsureTable();
         _hevyRepository.EnsureTables();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);

@@ -9,7 +9,7 @@ public partial class BotService
     // Each fitness user with step updates on gets a DM once per hour in their active hours: today's steps vs their goal.
     private async Task ProcessStepUpdates()
     {
-        var zone = ReminderSchedule.FindTimeZone(LifeTimeZone);
+        var zone = LifeClock.Zone;
         var nowUtc = DateTime.UtcNow;
         var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, zone);
         var today = DateOnly.FromDateTime(nowLocal).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

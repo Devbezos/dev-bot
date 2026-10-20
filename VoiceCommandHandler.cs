@@ -58,8 +58,11 @@ public partial class BotService
                     await HandleSlashCommand(slashCommand);
                 else if (interaction is SocketMessageComponent component
                     && !await TryHandleProgressCheckInButton(component)
-                    && !await TryHandleWaterButton(component))
+                    && !await TryHandleWaterButton(component)
+                    && !await TryHandleReminderExtraButton(component))
                     await HandleReminderButton(component);
+                else if (interaction is SocketModal modal)
+                    await HandleReminderModal(modal);
             }
             catch (Exception ex)
             {
@@ -97,6 +100,7 @@ public partial class BotService
                 lines.AddRange(keywordCommands.Select(c => $"`{c.Keyword}` · {c.Name}"));
             }
             lines.Add("-# Log water by sending an amount like `500ml`.");
+            lines.Add("-# Set a reminder with `!remind`, or send what and an @time, like `call mom` + @time.");
             await message.Channel.SendMessageAsync(string.Join('\n', lines));
             return true;
         }
