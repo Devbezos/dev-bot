@@ -78,7 +78,7 @@ public partial class BotService
         try
         {
             var s = await FitnessClients.Create(user, _hevyRepository).GetDaySnapshot(day, sleepWakeDate: day);
-            await SaveAutoHabits([(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), new AutoHabitStats(s.Steps, s.SleepHours, s.CaloriesEaten, s.Activities.Count))]);
+            await SaveAutoHabits([(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), AutoHabitStats.From(s.Steps, s.SleepHours, s.CaloriesEaten, s.Activities))]);
         }
         catch (Exception ex)
         {
