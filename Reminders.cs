@@ -32,7 +32,6 @@ public partial class BotService
                 await RunReminderStep("progress check-in", ProcessProgressCheckIn);
                 await RunReminderStep("water reminders", ProcessWaterReminders);
                 await RunReminderStep("step updates", ProcessStepUpdates);
-                await RunReminderStep("fitness history", ProcessFitnessHistory);
                 await RunReminderStep("75 Hard", ProcessHard75);
                 await RunReminderStep("Hevy workouts", ProcessHevySync);
                 await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);

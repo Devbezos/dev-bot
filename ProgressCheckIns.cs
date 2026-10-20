@@ -8,6 +8,8 @@ public partial class BotService
 {
     // Progress is one JSON document, so concurrent answers (fast button taps) must not overwrite each other.
     private readonly SemaphoreSlim _progressLock = new(1, 1);
+    // The check-in re-checks every tick until something is asked, so Google is only read once a day for it.
+    private DateOnly _autoHabitsFilledOn;
 
     // Once the check-in time passes, DMs one question per unfinished habit and open task due today.
     private async Task ProcessProgressCheckIn()
@@ -19,6 +21,13 @@ public partial class BotService
             return;
 
         var userId = ulong.Parse(state.CheckIn.DiscordUserId);
+        var today = DateOnly.FromDateTime(nowLocal);
+        if (_autoHabitsFilledOn != today && state.Habits.Any(ProgressAutoHabits.IsAuto))
+        {
+            _autoHabitsFilledOn = today;
+            await FillAutoHabitsLive(userId, today);
+            state = _progressRepository.Get();
+        }
         var items = ProgressCheckInRules.ItemsToAsk(state, date, userId);
         if (items.Count == 0)
             return;
@@ -54,6 +63,59 @@ public partial class BotService
                 LogException(ex, $"progressCheckInId={item.Id}");
                 LogWarn($"Progress check-in DM for '{item.ItemName}' failed: {ex.Message}");
             }
+        }
+    }
+
+    // Fills sleep, steps, gym and calories habits for `day` from Google Health (and Hevy) right before the check-in.
+    private async Task FillAutoHabitsLive(ulong userId, DateOnly day)
+    {
+        var user = FindFitnessUserFor(userId);
+        if (user is null)
+        {
+            LogWarn($"Progress check-in: no Google Health account for {userId}, so automatic habits weren't filled");
+            return;
+        }
+        try
+        {
+            var s = await FitnessClients.Create(user, _hevyRepository).GetDaySnapshot(day, sleepWakeDate: day);
+            await SaveAutoHabits([(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), new AutoHabitStats(s.Steps, s.SleepHours, s.CaloriesEaten, s.Activities.Count))]);
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Progress check-in: could not read Google Health for automatic habits: {ex.Message}");
+        }
+    }
+
+    // Re-fills automatic habits for recent days and today so far from the stored fitness history, which also catches data the phone synced late.
+    private async Task FillAutoHabitsFromHistory(DateOnly today)
+    {
+        var state = _progressRepository.Get();
+        if (!state.Habits.Any(ProgressAutoHabits.IsAuto) || !ulong.TryParse(state.CheckIn.DiscordUserId, out var userId) || FindFitnessUserFor(userId) is not { } user)
+            return;
+        var days = _fitnessHistoryRepository.Get(user.Username,
+            today.AddDays(-FitnessHistoryRecorder.RefreshRecentDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        await SaveAutoHabits(days.Select(d => (d.Date, ProgressAutoHabits.StatsOf(d))));
+    }
+
+    private GoogleHealthUserSettings? FindFitnessUserFor(ulong userId) =>
+        FitnessUserMatch.Find(userId, _fitnessRepository.GetGoogleHealthSettingsAll(), _discordUserRepository.GetAll(), _hevyRepository.GetState());
+
+    private async Task SaveAutoHabits(IEnumerable<(string Date, AutoHabitStats Stats)> days)
+    {
+        await _progressLock.WaitAsync();
+        try
+        {
+            var state = _progressRepository.Get();
+            var changed = false;
+            foreach (var (date, stats) in days)
+                changed |= ProgressAutoHabits.Fill(state, date, stats);
+            if (changed)
+                _progressRepository.Save(state);
+        }
+        finally
+        {
+            _progressLock.Release();
         }
     }
 
