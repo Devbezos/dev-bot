@@ -9,8 +9,7 @@ public partial class BotService
     // and later ones keep that spacing.
     private DateTime _nextHevySyncUtc = DateTime.UtcNow.AddMinutes(Random.Shared.Next(1, 30));
 
-    // Every 30 minutes: pulls new, edited and deleted workouts from Hevy, then ticks 75 Hard's Workout 1 for a
-    // workout today on the linked Discord user's checklist.
+    // Every 30 minutes: pulls new, edited and deleted workouts from Hevy.
     private async Task ProcessHevySync()
     {
         var nowUtc = DateTime.UtcNow;
@@ -30,14 +29,5 @@ public partial class BotService
         }
         if (result.Updated > 0 || result.Deleted > 0)
             LogInfo($"Hevy sync: {result.Updated} workout(s) added or updated, {result.Deleted} deleted");
-
-        var today = DateOnly.FromDateTime(LifeLocalNow());
-        var date = Hard75Rules.Format(today);
-        if (ulong.TryParse(_hevyRepository.GetState().DiscordUserId, out var userId)
-            && result.Changed.Any(w => HevyRules.LocalDate(w.StartTime) == date && HevyRules.CountsAsWorkout1(w)))
-        {
-            LogInfo($"75 Hard: ticking Workout 1 for {userId} from a Hevy workout");
-            await TickHard75Task(userId, today, "workout1");
-        }
     }
 }

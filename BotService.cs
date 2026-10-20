@@ -51,7 +51,6 @@ public partial class BotService : BackgroundService
     private readonly IBotActivityRepository _botActivityRepository;
     private readonly IStepUpdateRepository _stepUpdateRepository;
     private readonly IFitnessHistoryRepository _fitnessHistoryRepository;
-    private readonly IHard75Repository _hard75Repository;
     private readonly IHevyRepository _hevyRepository;
     private readonly DiscordSocketClient _discordBotClient;
     private volatile bool _schedulerReady;
@@ -94,7 +93,6 @@ public partial class BotService : BackgroundService
         IBotActivityRepository botActivityRepository,
         IStepUpdateRepository stepUpdateRepository,
         IFitnessHistoryRepository fitnessHistoryRepository,
-        IHard75Repository hard75Repository,
         IHevyRepository hevyRepository,
         DiscordSocketClient discordBotClient)
     {
@@ -129,7 +127,6 @@ public partial class BotService : BackgroundService
         _botActivityRepository = botActivityRepository;
         _stepUpdateRepository = stepUpdateRepository;
         _fitnessHistoryRepository = fitnessHistoryRepository;
-        _hard75Repository = hard75Repository;
         _hevyRepository = hevyRepository;
         _discordBotClient    = discordBotClient;
     }
@@ -161,7 +158,6 @@ public partial class BotService : BackgroundService
         _botActivityRepository.EnsureTables();
         _stepUpdateRepository.EnsureTable();
         _fitnessHistoryRepository.EnsureTable();
-        _hard75Repository.EnsureTables();
         _hevyRepository.EnsureTables();
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();

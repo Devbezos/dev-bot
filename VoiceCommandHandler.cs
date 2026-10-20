@@ -58,8 +58,7 @@ public partial class BotService
                     await HandleSlashCommand(slashCommand);
                 else if (interaction is SocketMessageComponent component
                     && !await TryHandleProgressCheckInButton(component)
-                    && !await TryHandleWaterButton(component)
-                    && !await TryHandleHard75Button(component))
+                    && !await TryHandleWaterButton(component))
                     await HandleReminderButton(component);
             }
             catch (Exception ex)

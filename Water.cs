@@ -33,7 +33,6 @@ public partial class BotService
 
         var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, text);
         var total = _waterRepository.GetTotal(userId, today);
-        await TickHard75WaterIfReached(userId, DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture), total);
         await ShowWaterMessage(userId, message.Channel,
             $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}",
             BuildWaterButtons(settings.Unit, entryId));
@@ -159,7 +158,6 @@ public partial class BotService
         var settings = _waterRepository.GetSettings(userId);
         var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, $"button {WaterRules.Format(amountMl, settings.Unit)}");
         var total = _waterRepository.GetTotal(userId, today);
-        await TickHard75WaterIfReached(userId, DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture), total);
         await component.UpdateAsync(m =>
         {
             m.Content = $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}";
