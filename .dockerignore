@@ -1,0 +1,15 @@
+.git
+**/bin
+**/obj
+.artifacts
+.tmp
+tmp
+dev-bot-tests
+logs
+data
+*.log
+*.bak
+appsettings*.json
+app-channels.json
+Dockerfile
+.dockerignore
