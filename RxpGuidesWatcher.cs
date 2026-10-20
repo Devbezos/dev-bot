@@ -195,6 +195,7 @@ public partial class BotService
     private static List<ulong> RxpGuidesTargetChannels(RxpGuidesWatch watch)
     {
         var channels = AppSettings.Guilds
+            .Where(g => !g.HiddenTabs.Contains("rxpguides"))
             .Select(g => g.Channels.GetValueOrDefault(RxpGuidesChannelKey))
             .Where(id => id != 0)
             .Distinct()
