@@ -50,7 +50,7 @@ In the API configuration, set `hevy:apiKey` and `hevy:webhookToken` to a long ra
 }
 ```
 
-Restart the API and bot after changing their configuration, then register the URL below, with `Bearer <webhookToken>` as HEVY's authorization header. Production: `https://dev-ui-production-70b8.up.railway.app/api/hevy/webhook` (dev-ui proxies `/api` to the API).
+Restart the API and bot after changing their configuration, then register the URL below, with `Bearer <webhookToken>` as HEVY's authorization header. Production: `https://devbot.gruulsgonewild.com/api/hevy/webhook` (dev-ui proxies `/api` to the API).
 
 ```text
 https://<your-api-host>/api/hevy/webhook
