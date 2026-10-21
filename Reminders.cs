@@ -34,6 +34,7 @@ public partial class BotService
                 await RunReminderStep("step updates", ProcessStepUpdates);
                 await RunReminderStep("calendar reminders", ProcessCalendarReminders);
                 await RunReminderStep("Discord directory", ProcessDiscordDirectory);
+                await RunReminderStep("Hevy workout notifications", ProcessHevyNotifications);
                 await RunReminderStep("Hevy workouts", ProcessHevySync);
                 await RunReminderStep("bot command tasks and scripts", RefreshBotCommandSnapshots);
             }
