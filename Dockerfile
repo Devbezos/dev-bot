@@ -19,5 +19,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:9.0
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libopus-dev libsodium-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app .
+# The bot keeps small state files (retry queues, TCG and raid reminder state) in /app/data.
+RUN mkdir -p /app/data && chown app:app /app/data
 COPY docker-entrypoint.sh /docker-entrypoint.sh
+# The entrypoint starts as root to write settings, then runs the bot as the image's "app" user.
 ENTRYPOINT ["sh", "/docker-entrypoint.sh"]

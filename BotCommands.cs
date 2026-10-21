@@ -223,16 +223,26 @@ public partial class BotService
             _botCommandRepository.FinishRun(runId, ok, process.ExitCode, output, DateTime.UtcNow);
             if (!ok)
                 LogWarn($"Bot command '{command.Name}' exited with {process.ExitCode}");
-            var heading = ok ? $"✅ **{command.Name}** finished." : $"❌ **{command.Name}** failed (exit code {process.ExitCode}).";
-            await reply.ModifyAsync(m => m.Content = output.Length == 0 ? heading : $"{heading}\n```\n{Truncate(output, 1500).Replace("```", "'''")}\n```");
+            await reply.ModifyAsync(m => m.Content = ScriptResultMessage(command.Name, process.ExitCode, output, reply.Channel is IDMChannel));
         }
         catch (Exception ex)
         {
             LogException(ex, $"botCommand={command.Name}");
-            _botCommandRepository.FinishRun(runId, false, null, ex.Message, DateTime.UtcNow);
-            try { await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**: {Truncate(ex.Message, 300)}"); }
+            // Exception messages can carry paths and credentials: the log has the details.
+            _botCommandRepository.FinishRun(runId, false, null, $"Couldn't start the script ({ex.GetType().Name}).", DateTime.UtcNow);
+            try { await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**. Check the bot's log for details."); }
             catch (Exception replyEx) { LogWarn($"Could not report bot command failure: {replyEx.Message}"); }
         }
+    }
+
+    /// <summary>
+    /// The finished-script reply. The log tail can hold paths or secrets the script printed, so it's shown only in a
+    /// DM; a guild channel gets the status and exit code.
+    /// </summary>
+    public static string ScriptResultMessage(string name, int exitCode, string output, bool inDm)
+    {
+        var heading = exitCode == 0 ? $"✅ **{name}** finished." : $"❌ **{name}** failed (exit code {exitCode}).";
+        return !inDm || output.Length == 0 ? heading : $"{heading}\n```\n{Truncate(output, 1500).Replace("```", "'''")}\n```";
     }
 
     private static async Task<bool> WaitForExit(Process process, TimeSpan timeout)

@@ -2,164 +2,141 @@ using DevClient.Data;
 using DevClient;
 using DevClient.Clients;
 using Moq;
-using Newtonsoft.Json;
 
 namespace dev_bot_tests.Tests
 {
-    public class RealmClientTests : IDisposable
+    public class RealmClientTests
     {
-        private readonly string _tempBasePath;
-        private readonly string _cacheFile;
+        private readonly Mock<IDiscordClient> _discord = new();
+        private readonly Mock<IBattleNetClient> _battleNet = new();
+        private readonly Mock<IServerAvailabilityRepository> _repo = new();
+        private readonly List<GuildServerAvailability> _monitored = [];
 
-        public RealmClientTests()
+        public RealmClientTests() => _repo.Setup(r => r.GetMonitored()).Returns(_monitored);
+
+        private RealmClient Sut() => new(_discord.Object, _battleNet.Object, _repo.Object);
+
+        private void Monitor(string guild, string channelId, string region = "us", string slug = "zuljin", params string[] roles) =>
+            _monitored.Add(new GuildServerAvailability(guild, true, region, slug, "Zul'jin", channelId, roles));
+
+        private void Cached(string status, string region = "us", string slug = "zuljin") =>
+            _repo.Setup(r => r.GetStatus(region, slug)).Returns(new RealmStatus(region, slug, "Zul'jin", status, DateTime.UtcNow.AddHours(-1)));
+
+        private void Live(string status, string region = "us", string slug = "zuljin") =>
+            _battleNet.Setup(b => b.GetRealmStatus(region, slug)).ReturnsAsync(new BattleNetRealmStatus("Zul'jin", status));
+
+        [Fact]
+        public async Task BackUp_PostsOnlineMessageWithRoleMentions_AndUpdatesCache()
         {
-            _tempBasePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-            Directory.CreateDirectory(_tempBasePath);
-            _cacheFile = Path.Combine(_tempBasePath, "realmcache.json");
+            Monitor("REFINED", "100", roles: ["123456", "789"]);
+            Cached("DOWN");
+            Live("UP");
 
-            AppSettings.BasePath = _tempBasePath;
-            AppSettings.Guilds = new[]
-            {
-                new GuildSettings
-                {
-                    Name = "REFINED",
-                    Channels = new Dictionary<string, ulong> { ["general"] = 100ul },
-                    RolesToPing = new[] { "123456" },
-                    Features = new GuildFeatures { ServerAvailability = true }
-                }
-            };
-        }
+            await Sut().PostServerAvailability();
 
-        public void Dispose()
-        {
-            if (Directory.Exists(_tempBasePath))
-                Directory.Delete(_tempBasePath, recursive: true);
-        }
-
-        private void WriteCache(string statusName)
-        {
-            var cached = new BlizzardRealmResponse { Status = new Status { Name = statusName } };
-            File.WriteAllText(_cacheFile, JsonConvert.SerializeObject(cached));
+            _discord.Verify(d => d.PostToChannel(100ul, "Servers are back online! maybe? :3 <@&123456> <@&789>"), Times.Once);
+            _repo.Verify(r => r.SaveStatus(It.Is<RealmStatus>(s => s.Region == "us" && s.RealmSlug == "zuljin" && s.Status == "UP")), Times.Once);
         }
 
         [Fact]
-        public async Task PostServerAvailability_WhenStatusChangesFromDownToUp_PostsOnlineMessage_ReturnsTrue()
+        public async Task WentDown_PostsOfflineMessageWithoutMentions()
         {
-            WriteCache("Down");
+            Monitor("REFINED", "100", roles: ["123456"]);
+            Cached("UP");
+            Live("DOWN");
 
-            var mockDiscord = new Mock<IDiscordClient>();
-            var mockBattleNet = new Mock<IBattleNetClient>();
-            mockBattleNet.Setup(b => b.GetZuljinData())
-                .ReturnsAsync(new BlizzardRealmResponse { Status = new Status { Name = "Up" } });
+            await Sut().PostServerAvailability();
 
-            var sut = new RealmClient(mockDiscord.Object, mockBattleNet.Object);
-            var result = await sut.PostServerAvailability();
-
-            Assert.True(result);
-            mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => s.Contains("back online"))), Times.Once);
-            mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => s.Contains("<@&123456>"))), Times.Once);
+            _discord.Verify(d => d.PostToChannel(100ul, "Servers have gone offline! maybe? :3"), Times.Once);
+            _repo.Verify(r => r.SaveStatus(It.Is<RealmStatus>(s => s.Status == "DOWN")), Times.Once);
         }
 
         [Fact]
-        public async Task PostServerAvailability_WhenStatusChangesFromUpToDown_PostsOfflineMessage_ReturnsFalse()
+        public async Task Unchanged_DoesNotPostOrSave()
         {
-            WriteCache("Up");
+            Monitor("REFINED", "100");
+            Cached("UP");
+            Live("UP");
 
-            var mockDiscord = new Mock<IDiscordClient>();
-            var mockBattleNet = new Mock<IBattleNetClient>();
-            mockBattleNet.Setup(b => b.GetZuljinData())
-                .ReturnsAsync(new BlizzardRealmResponse { Status = new Status { Name = "Down" } });
+            await Sut().PostServerAvailability();
 
-            var sut = new RealmClient(mockDiscord.Object, mockBattleNet.Object);
-            var result = await sut.PostServerAvailability();
-
-            Assert.False(result);
-            mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => s.Contains("gone offline"))), Times.Once);
+            _discord.Verify(d => d.PostToChannel(It.IsAny<ulong>(), It.IsAny<string>()), Times.Never);
+            _repo.Verify(r => r.SaveStatus(It.IsAny<RealmStatus>()), Times.Never);
         }
 
         [Fact]
-        public async Task PostServerAvailability_WhenStatusUnchanged_DoesNotPostMessage_ReturnsFalse()
+        public async Task FirstObservation_SeedsCacheWithoutPosting()
         {
-            WriteCache("Up");
+            Monitor("REFINED", "100");
+            Live("UP");
 
-            var mockDiscord = new Mock<IDiscordClient>();
-            var mockBattleNet = new Mock<IBattleNetClient>();
-            mockBattleNet.Setup(b => b.GetZuljinData())
-                .ReturnsAsync(new BlizzardRealmResponse { Status = new Status { Name = "Up" } });
+            await Sut().PostServerAvailability();
 
-            var sut = new RealmClient(mockDiscord.Object, mockBattleNet.Object);
-            var result = await sut.PostServerAvailability();
-
-            Assert.False(result);
-            mockDiscord.Verify(d => d.PostToChannel(It.IsAny<ulong>(), It.IsAny<string>()), Times.Never);
+            _repo.Verify(r => r.SaveStatus(It.Is<RealmStatus>(s => s.Status == "UP" && s.RealmName == "Zul'jin")), Times.Once);
+            _discord.Verify(d => d.PostToChannel(It.IsAny<ulong>(), It.IsAny<string>()), Times.Never);
         }
 
         [Fact]
-        public async Task PostServerAvailability_OnlyPostsToGuildsWithServerAvailabilityEnabled()
+        public async Task BattleNetFailure_LeavesCacheAlone_AndStillChecksOtherRealms()
         {
-            WriteCache("Down");
+            Monitor("REFINED", "100");
+            Monitor("EUGUILD", "200", region: "eu", slug: "draenor");
+            Cached("UP");
+            Cached("UP", "eu", "draenor");
+            _battleNet.Setup(b => b.GetRealmStatus("us", "zuljin")).ThrowsAsync(new HttpRequestException("503"));
+            Live("DOWN", "eu", "draenor");
 
-            AppSettings.Guilds = new[]
-            {
-                new GuildSettings
-                {
-                    Name = "REFINED",
-                    Channels = new Dictionary<string, ulong> { ["general"] = 100ul },
-                    RolesToPing = Array.Empty<string>(),
-                    Features = new GuildFeatures { ServerAvailability = true }
-                },
-                new GuildSettings
-                {
-                    Name = "DISABLED",
-                    Channels = new Dictionary<string, ulong> { ["general"] = 200ul },
-                    RolesToPing = Array.Empty<string>(),
-                    Features = new GuildFeatures { ServerAvailability = false }
-                }
-            };
+            await Sut().PostServerAvailability();
 
-            var mockDiscord = new Mock<IDiscordClient>();
-            var mockBattleNet = new Mock<IBattleNetClient>();
-            mockBattleNet.Setup(b => b.GetZuljinData())
-                .ReturnsAsync(new BlizzardRealmResponse { Status = new Status { Name = "Up" } });
-
-            var sut = new RealmClient(mockDiscord.Object, mockBattleNet.Object);
-            await sut.PostServerAvailability();
-
-            mockDiscord.Verify(d => d.PostToChannel(100ul, It.IsAny<string>()), Times.Once);
-            mockDiscord.Verify(d => d.PostToChannel(200ul, It.IsAny<string>()), Times.Never);
+            _repo.Verify(r => r.SaveStatus(It.Is<RealmStatus>(s => s.RealmSlug == "zuljin")), Times.Never);
+            _discord.Verify(d => d.PostToChannel(100ul, It.IsAny<string>()), Times.Never);
+            _discord.Verify(d => d.PostToChannel(200ul, "Servers have gone offline! maybe? :3"), Times.Once);
         }
 
         [Fact]
-        public async Task PostServerAvailability_WhenNoRolesConfigured_DoesNotPostEmptyRoleMention()
+        public async Task GuildsOnTheSameRealm_ShareOneFetch_AndEachGetsItsOwnPost()
         {
-            WriteCache("Down");
+            Monitor("REFINED", "100", roles: ["1"]);
+            Monitor("OTHER", "200", region: "US", slug: "Zuljin");
+            Monitor("EUGUILD", "300", region: "eu", slug: "draenor");
+            Cached("DOWN");
+            Cached("DOWN", "eu", "draenor");
+            Live("UP");
+            Live("DOWN", "eu", "draenor");
 
-            AppSettings.Guilds = new[]
-            {
-                new GuildSettings
-                {
-                    Name = "REFINED",
-                    Channels = new Dictionary<string, ulong> { ["general"] = 100ul },
-                    RolesToPing = Array.Empty<string>(),
-                    Features = new GuildFeatures { ServerAvailability = true }
-                }
-            };
+            await Sut().PostServerAvailability();
 
-            var mockDiscord = new Mock<IDiscordClient>();
-            var mockBattleNet = new Mock<IBattleNetClient>();
-            mockBattleNet.Setup(b => b.GetZuljinData())
-                .ReturnsAsync(new BlizzardRealmResponse { Status = new Status { Name = "Up" } });
+            _battleNet.Verify(b => b.GetRealmStatus("us", "zuljin"), Times.Once);
+            _battleNet.Verify(b => b.GetRealmStatus("eu", "draenor"), Times.Once);
+            _discord.Verify(d => d.PostToChannel(100ul, "Servers are back online! maybe? :3 <@&1>"), Times.Once);
+            _discord.Verify(d => d.PostToChannel(200ul, "Servers are back online! maybe? :3"), Times.Once);
+            _discord.Verify(d => d.PostToChannel(300ul, It.IsAny<string>()), Times.Never);
+        }
 
-            var sut = new RealmClient(mockDiscord.Object, mockBattleNet.Object);
-            await sut.PostServerAvailability();
+        [Fact]
+        public async Task NoRolesConfigured_DoesNotPostEmptyRoleMention()
+        {
+            Monitor("REFINED", "100", roles: ["", " "]);
+            Cached("DOWN");
+            Live("UP");
 
-            mockDiscord.Verify(d => d.PostToChannel(100ul, It.Is<string>(s => !s.Contains("<@&>"))), Times.Once);
+            await Sut().PostServerAvailability();
+
+            _discord.Verify(d => d.PostToChannel(100ul, "Servers are back online! maybe? :3"), Times.Once);
+        }
+
+        [Fact]
+        public async Task OneChannelFailing_DoesNotStopTheOthers()
+        {
+            Monitor("REFINED", "100");
+            Monitor("OTHER", "200");
+            Cached("UP");
+            Live("DOWN");
+            _discord.Setup(d => d.PostToChannel(100ul, It.IsAny<string>())).ThrowsAsync(new InvalidOperationException("missing access"));
+
+            await Sut().PostServerAvailability();
+
+            _discord.Verify(d => d.PostToChannel(200ul, "Servers have gone offline! maybe? :3"), Times.Once);
         }
     }
 }
-
-
-
-
-
-

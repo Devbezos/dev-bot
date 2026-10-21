@@ -13,3 +13,6 @@ appsettings*.json
 app-channels.json
 Dockerfile
 .dockerignore
+**/build
+**/logs
+**/*.log

@@ -56,7 +56,7 @@ Restart the API and bot after changing their configuration, then register the UR
 https://<your-api-host>/api/hevy/webhook
 ```
 
-HEVY sends `{ "workoutId": "<uuid>" }`. The API validates the token and ID, persists a notification, and returns `200 OK` without waiting for HEVY or Discord. A database timeout returns `503` rather than acknowledging an unsaved notification. A `?token=` query string is also accepted in place of the header; if you use it, redact query strings from proxy logs.
+HEVY sends `{ "workoutId": "<uuid>" }`. The API validates the token and ID, persists a notification, and returns `200 OK` without waiting for HEVY or Discord. A database timeout returns `503` rather than acknowledging an unsaved notification. The token is only accepted in the header, never as a `?token=` query string.
 
 The bot checks the queue every 30 seconds, fetches that workout, updates the local workout history, and posts an embed with duration, exercise and working-set counts, working volume, and sets per exercise. Weight uses the synced account preference (`kg` or `lbs`). Warm-ups appear in the exercise breakdown but do not count toward working volume. Long breakdowns are shortened to fit Discord's embed limits.
 
