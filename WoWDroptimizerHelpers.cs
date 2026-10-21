@@ -83,7 +83,7 @@ public partial class BotService
 
     private async Task<WoWAuditWishlistResponse> UpdateWoWAuditWishlist(string reportId, string guildName)
     {
-        var guild = AppSettings.Guilds.First(g => g.Name == guildName.ToUpper());
+        var guild = AppSettings.Guilds.First(g => string.Equals(g.Name, guildName, StringComparison.OrdinalIgnoreCase));
         var token = ResolveWoWAuditToken(guild);
 
         if (string.IsNullOrWhiteSpace(token))
