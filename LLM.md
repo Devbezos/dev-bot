@@ -36,16 +36,3 @@ D:\Code\deploy.ps1
 ```
 
 Do not replace this with repo-specific deploy commands unless the user explicitly asks for a different deploy path.
-
-## Working efficiently
-
-Adapted from [drona23/claude-token-efficient](https://github.com/drona23/claude-token-efficient) (MIT).
-
-- Read a file before editing it, and don't re-read it unless it changed. Skip files over 100 KB unless they're needed.
-- Think it through, but keep replies short: lead with the result, with no opener or closing filler.
-- Write the simplest change that works: no speculative features, extra abstractions, or error handling for cases that can't happen. Leave code you aren't changing alone (no new comments, docstrings or annotations on it).
-- Debugging: read the relevant code before forming a theory, then report what's wrong, where, and the fix in one pass. If the cause is unclear, say so instead of guessing.
-- Reviews: name the bug, show the fix, stop.
-- Don't guess APIs, versions, flags, package names or commit SHAs; check the code or docs.
-- Run the tests before calling something done.
-- Code and docs use plain ASCII punctuation: hyphens and straight quotes, no em dashes or emoji. Text the bot sends to Discord keeps its emoji.
