@@ -45,7 +45,7 @@ public partial class BotService
         {
             var by = command.LastRunBy is { } userId ? $" by <@{userId}>" : "";
             await message.Channel.SendMessageAsync(
-                $"**{command.Name}** was requested{by} <t:{new DateTimeOffset(command.LastRunUtc!.Value).ToUnixTimeSeconds()}:R>. " +
+                $"**{command.Name}** was {(command.Action == "remote-task" ? "requested" : "run")}{by} <t:{new DateTimeOffset(command.LastRunUtc!.Value).ToUnixTimeSeconds()}:R>. " +
                 $"Try again in {Math.Ceiling(wait.TotalMinutes)} min.",
                 messageReference: reference, allowedMentions: AllowedMentions.None);
             return;
