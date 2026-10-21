@@ -1,5 +1,39 @@
 # dev-bot
 
+## Remote game-server tasks
+
+DM commands use the existing Commands page, allowed Discord users, and run history. Local Task Scheduler and script actions still run on the bot machine. Choose **Remote TaskAgent** to request a predefined task alias on a separate game server.
+
+Add this section to the bot's private `appsettings.json` (loaded from its working directory), or use the corresponding environment variables:
+
+```json
+{
+  "remoteTaskAgent": {
+    "baseUrl": "http://192.168.1.50:5047/",
+    "apiKey": "REPLACE_WITH_THE_TASKAGENT_SHARED_SECRET",
+    "timeoutSeconds": 15
+  }
+}
+```
+
+Environment variables: `remoteTaskAgent__baseUrl`, `remoteTaskAgent__apiKey`, and `remoteTaskAgent__timeoutSeconds`. Environment values override the JSON settings. The secret belongs in private configuration, never in command targets or source control. Restart the bot after changing it. Timeout must be 1-60 seconds and defaults to 15.
+
+In Commands, edit the existing Valheim command to preserve its allowed users and history:
+
+- Name: `Restart Valheim`
+- Keyword: `restart valheim`
+- Runs: `Remote TaskAgent`
+- Task alias: `valheim`
+- Who can run it: retain the existing allowed users
+- Enabled: on
+- Cooldown: at least 5 minutes
+
+Only the whole normalized keyword matches. The target is an administrator-configured alias, never text supplied by the Discord message. Remote aliases support 1-64 letters, numbers, spaces, underscores, or hyphens; paths and script arguments are rejected. TaskAgent must map the alias to its own Task Scheduler path.
+
+The bot posts to `{baseUrl}/api/tasks/{escaped-alias}/run` with a bearer token and no body. All 2xx statuses mean the start request was accepted, **not that the task completed**. The original Discord reply is edited with that result. Redirects are disabled, requests are not automatically retried, and raw response bodies, connection details, and exception messages are kept out of Discord and run history. Failed and timed-out remote attempts also retain the cooldown because the task may already have started. Dry-run mode records the simulated run without sending a request.
+
+The bot host must be able to reach TaskAgent. A Railway-hosted bot cannot reach a home LAN address without a private network route/tunnel. Keep plain HTTP on a private network and restrict the game server's firewall to the bot host. A read-only `GET {baseUrl}/health` should return `{"status":"ok"}`; checking health does not run a task.
+
 ## HEVY workout notifications
 
 Set `hevy:apiKey` and `hevy:workoutChannelId` in the configuration loaded by the bot (it also reads the API settings). The channel ID is the Discord text channel or thread where workouts should be posted; the bot needs permission to view it, send messages, and embed links. API and bot must use the same database.

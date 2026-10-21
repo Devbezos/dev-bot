@@ -47,6 +47,8 @@ public partial class BotService : BackgroundService
     private readonly IProgressCheckInRepository _progressCheckInRepository;
     private readonly IDiscordUserRepository _discordUserRepository;
     private readonly IBotCommandRepository _botCommandRepository;
+    private readonly BotCommandRunStarter _botCommandRunStarter;
+    private readonly RemoteTaskAgentClient _remoteTaskAgentClient;
     private readonly IWaterRepository _waterRepository;
     private readonly IBotActivityRepository _botActivityRepository;
     private readonly IStepUpdateRepository _stepUpdateRepository;
@@ -93,6 +95,8 @@ public partial class BotService : BackgroundService
         IProgressCheckInRepository progressCheckInRepository,
         IDiscordUserRepository discordUserRepository,
         IBotCommandRepository botCommandRepository,
+        BotCommandRunStarter botCommandRunStarter,
+        RemoteTaskAgentClient remoteTaskAgentClient,
         IWaterRepository waterRepository,
         IBotActivityRepository botActivityRepository,
         IStepUpdateRepository stepUpdateRepository,
@@ -131,6 +135,8 @@ public partial class BotService : BackgroundService
         _progressCheckInRepository = progressCheckInRepository;
         _discordUserRepository = discordUserRepository;
         _botCommandRepository = botCommandRepository;
+        _botCommandRunStarter = botCommandRunStarter;
+        _remoteTaskAgentClient = remoteTaskAgentClient;
         _waterRepository = waterRepository;
         _botActivityRepository = botActivityRepository;
         _stepUpdateRepository = stepUpdateRepository;

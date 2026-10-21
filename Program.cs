@@ -30,11 +30,12 @@ Log.Logger = new LoggerConfiguration()
 
 var host = Host.CreateDefaultBuilder(args)
     .UseSerilog()
-    .ConfigureServices((_, services) =>
+    .ConfigureServices((context, services) =>
     {
         var connStr = AppSettings.MySql.ConnectionString;
         services.AddApiRepositories(connStr);
         services.AddDevClientClients();
+        services.AddRemoteTaskAgent(context.Configuration);
 
         services.AddSingleton(new DiscordSocketClient(new DiscordSocketConfig
         {

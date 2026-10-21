@@ -12,8 +12,6 @@ public partial class BotService
     private static readonly TimeSpan ScriptMaxWait = TimeSpan.FromHours(12);
     private DateTime _botCommandSnapshotUtc = DateTime.MinValue;
     private string? _snapshotScriptsFolder;
-    // Serializes the cooldown check and run start, so two people sending a keyword at once can't both pass.
-    private readonly SemaphoreSlim _botCommandLock = new(1, 1);
 
     // A DM, or a message mentioning the bot, whose whole text is a command's keyword.
     private async Task<bool> TryHandleBotCommand(SocketMessage message)
@@ -40,37 +38,68 @@ public partial class BotService
 
     private async Task RunBotCommand(int commandId, SocketMessage message, MessageReference reference)
     {
-        BotCommand? command;
-        int runId;
-        IUserMessage reply;
-        await _botCommandLock.WaitAsync();
+        var start = _botCommandRunStarter.TryStart(commandId, message.Author.Id, DateTime.UtcNow);
+        if (start is null) return;
+        var command = start.Command;
+        if (start.Cooldown is { } wait)
+        {
+            var by = command.LastRunBy is { } userId ? $" by <@{userId}>" : "";
+            await message.Channel.SendMessageAsync(
+                $"**{command.Name}** was requested{by} <t:{new DateTimeOffset(command.LastRunUtc!.Value).ToUnixTimeSeconds()}:R>. " +
+                $"Try again in {Math.Ceiling(wait.TotalMinutes)} min.",
+                messageReference: reference, allowedMentions: AllowedMentions.None);
+            return;
+        }
+
+        var runId = start.RunId!.Value;
+        LogInfo($"Running bot command '{command.Name}' ({command.Action}) for {message.Author.Username} ({message.Author.Id})");
+        var reply = await message.Channel.SendMessageAsync($"Running **{command.Name}**...", messageReference: reference,
+            allowedMentions: AllowedMentions.None);
+        _ = Task.Run(() => command.Action switch
+        {
+            "task" => RunTaskCommand(command, runId, reply),
+            "remote-task" => RunRemoteTaskCommand(command, runId, reply),
+            "script" => RunScriptCommand(command, runId, reply),
+            _ => Task.CompletedTask,
+        });
+    }
+
+    private async Task RunRemoteTaskCommand(BotCommand command, int runId, IUserMessage reply)
+    {
+        RemoteTaskAgentResult result;
         try
         {
-            var nowUtc = DateTime.UtcNow;
-            command = _botCommandRepository.Get(commandId);
-            if (command is null || !BotCommandRules.CanRun(command, message.Author.Id))
-                return;
-
-            if (BotCommandRules.CooldownLeft(command, nowUtc) is { } wait)
-            {
-                var by = command.LastRunBy is { } userId ? $" by <@{userId}>" : "";
-                await message.Channel.SendMessageAsync(
-                    $"**{command.Name}** was run{by} <t:{new DateTimeOffset(command.LastRunUtc!.Value).ToUnixTimeSeconds()}:R>. " +
-                    $"Try again in {Math.Ceiling(wait.TotalMinutes)} min.",
-                    messageReference: reference, allowedMentions: AllowedMentions.None);
-                return;
-            }
-
-            LogInfo($"Running bot command '{command.Name}' ({command.Action} {command.Target}) for {message.Author.Username} ({message.Author.Id})");
-            runId = _botCommandRepository.StartRun(command, message.Author.Id, nowUtc);
-            reply = await message.Channel.SendMessageAsync($"▶️ Running **{command.Name}**…", messageReference: reference);
+            result = AppSettings.DryRun
+                ? new(true, null, "[DRY RUN] Remote task not requested.")
+                : await _remoteTaskAgentClient.RunAsync(command.Target);
         }
-        finally
+        catch (Exception ex)
         {
-            _botCommandLock.Release();
+            // Exception messages can include URLs and credentials. Retain only the exception type.
+            LogWarn($"Remote task command {command.Id} failed ({ex.GetType().Name}).");
+            result = new(false, null, "Could not confirm the task request. Check the game server before retrying.");
         }
 
-        _ = Task.Run(() => command.Action == "task" ? RunTaskCommand(command, runId, reply) : RunScriptCommand(command, runId, reply));
+        _botCommandRepository.FinishRun(runId, result.Succeeded, null,
+            result.StatusCode is { } status ? $"HTTP {status}: {result.Message}" : result.Message, DateTime.UtcNow);
+        if (!result.Succeeded)
+            LogWarn($"Remote task command {command.Id} failed (HTTP {result.StatusCode?.ToString() ?? "unavailable"}).");
+        try
+        {
+            await reply.ModifyAsync(m =>
+            {
+                m.AllowedMentions = AllowedMentions.None;
+                m.Content = result.Succeeded
+                    ? AppSettings.DryRun ? $"**{command.Name}** finished (dry run; no request sent)."
+                        : $"✅ {command.Name} was requested on the game server."
+                    : $"Couldn't request **{command.Name}**. {result.Message}";
+            });
+        }
+        catch (Exception ex)
+        {
+            // A Discord edit failure must not change an accepted request into a failed run.
+            LogWarn($"Could not update remote task reply for command {command.Id} ({ex.GetType().Name}).");
+        }
     }
 
     // schtasks only starts the task, so the bot then watches its status until it stops running and reports
