@@ -29,6 +29,11 @@ public partial class BotService
                     options: new RequestOptions { CancelToken = timeout.Token });
                 _hevyRepository.CompleteNotification(notification.WorkoutId, DateTime.UtcNow);
             }
+            catch (Exception ex) when (HevyNotificationGivesUp(ex, notification.Attempts))
+            {
+                _hevyRepository.AbandonNotification(notification.WorkoutId, DateTime.UtcNow, ex.Message);
+                LogWarn($"Hevy workout {notification.WorkoutId}: not posting after {notification.Attempts} attempt(s). {ex.Message}");
+            }
             catch (Exception ex)
             {
                 var delayMinutes = Math.Min(60, Math.Pow(2, Math.Min(notification.Attempts, 6)));
@@ -37,6 +42,12 @@ public partial class BotService
             }
         }
     }
+
+    // Retries back off to hourly, so 30 attempts is about a day. A workout deleted from Hevy (404) never comes back.
+    internal const int MaxHevyNotificationAttempts = 30;
+
+    internal static bool HevyNotificationGivesUp(Exception ex, int attempts) =>
+        attempts >= MaxHevyNotificationAttempts || ex is HevyApiException { Status: System.Net.HttpStatusCode.NotFound };
 
     internal static Embed BuildHevyWorkoutEmbed(HevyWorkout workout, HevySyncState state)
     {

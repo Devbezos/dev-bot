@@ -56,4 +56,17 @@ public class HevyWorkoutTests
         Assert.All(embed.Fields, f => Assert.True(f.Value.Length <= 1024));
         Assert.Contains(embed.Fields, f => f.Name == "More exercises");
     }
+
+    private static bool GivesUp(Exception ex, int attempts) =>
+        (bool)typeof(BotService).GetMethod("HevyNotificationGivesUp", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [ex, attempts])!;
+
+    [Fact]
+    public void Notifications_StopForDeletedWorkouts_AndAfterTheAttemptCap()
+    {
+        Assert.True(GivesUp(new DevClient.Clients.HevyApiException(System.Net.HttpStatusCode.NotFound, "gone"), 1));
+        Assert.False(GivesUp(new DevClient.Clients.HevyApiException(System.Net.HttpStatusCode.TooManyRequests, "slow down"), 1));
+        Assert.False(GivesUp(new TimeoutException(), 29));
+        Assert.True(GivesUp(new TimeoutException(), 30));
+    }
 }

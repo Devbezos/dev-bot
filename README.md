@@ -50,14 +50,14 @@ In the API configuration, set `hevy:apiKey` and `hevy:webhookToken` to a long ra
 }
 ```
 
-Restart the API and bot after changing their configuration, then register:
+Restart the API and bot after changing their configuration, then register the URL below, with `Bearer <webhookToken>` as HEVY's authorization header. Production: `https://dev-ui-production-70b8.up.railway.app/api/hevy/webhook` (dev-ui proxies `/api` to the API).
 
 ```text
-https://<your-api-host>/api/hevy/webhook?token=<URL-encoded-webhookToken>
+https://<your-api-host>/api/hevy/webhook
 ```
 
-HEVY sends `{ "workoutId": "<uuid>" }`. The API validates the token and ID, persists a notification, and returns `200 OK` without waiting for HEVY or Discord. A database timeout returns `503` rather than acknowledging an unsaved notification. Keep the URL private and redact its query string from proxy logs.
+HEVY sends `{ "workoutId": "<uuid>" }`. The API validates the token and ID, persists a notification, and returns `200 OK` without waiting for HEVY or Discord. A database timeout returns `503` rather than acknowledging an unsaved notification. A `?token=` query string is also accepted in place of the header; if you use it, redact query strings from proxy logs.
 
 The bot checks the queue every 30 seconds, fetches that workout, updates the local workout history, and posts an embed with duration, exercise and working-set counts, working volume, and sets per exercise. Weight uses the synced account preference (`kg` or `lbs`). Warm-ups appear in the exercise breakdown but do not count toward working volume. Long breakdowns are shortened to fit Discord's embed limits.
 
-Notifications survive restarts. Repeated callbacks for the same workout ID do not enqueue another post. Failed deliveries retry with backoff up to 60 minutes; dry-run mode leaves notifications pending. As with most outbound message queues, a crash after Discord accepts a message but before its database acknowledgement can cause a duplicate. The bot's existing 30-minute HEVY sync continues to pick up edits and deletions.
+Notifications survive restarts. Repeated callbacks for the same workout ID do not enqueue another post. Failed deliveries retry with backoff up to 60 minutes, and stop after 30 attempts (about a day), or straight away when HEVY says the workout no longer exists; `last_error` records why. Dry-run mode leaves notifications pending. As with most outbound message queues, a crash after Discord accepts a message but before its database acknowledgement can cause a duplicate. The bot's existing 30-minute HEVY sync continues to pick up edits and deletions.
