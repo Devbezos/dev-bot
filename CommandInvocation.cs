@@ -3,7 +3,7 @@ using Discord.WebSocket;
 
 /// <summary>
 /// One run of a slash command, whether it came from Discord's slash UI or from a DM whose whole text is the
-/// command's name ("cat" or "/cat"). Handlers reply through this so both paths behave the same.
+/// command's name ("cat" or "/cat"), or from a DM menu button. Handlers reply through this so every path behaves the same.
 /// </summary>
 public abstract class CommandInvocation
 {
@@ -53,6 +53,29 @@ public sealed class SlashCommandInvocation(SocketSlashCommand command) : Command
         Command.HasResponded
             ? Command.FollowupWithFileAsync(stream, fileName, text)
             : Command.RespondWithFileAsync(stream, fileName, text);
+}
+
+/// <summary>
+/// A slash command run from a button on the DM menu. Replies are ordinary DM messages, the same as <see cref="DmCommandInvocation"/>.
+/// </summary>
+public sealed class MenuCommandInvocation(SocketInteraction interaction, string name) : CommandInvocation
+{
+    public override string Name { get; } = name;
+    public override IUser User => interaction.User;
+    public override ulong? GuildId => interaction.GuildId;
+    public override IMessageChannel Channel => interaction.Channel;
+
+    // A button's defer acknowledges the click without changing the menu message.
+    public override Task DeferAsync(bool ephemeral = false) =>
+        interaction.HasResponded ? Task.CompletedTask : interaction.DeferAsync();
+
+    public override Task ReplyAsync(string text, bool ephemeral = false) =>
+        interaction.HasResponded ? interaction.FollowupAsync(text) : interaction.RespondAsync(text);
+
+    public override Task ReplyWithFileAsync(Stream stream, string fileName, string? text = null) =>
+        interaction.HasResponded
+            ? interaction.FollowupWithFileAsync(stream, fileName, text)
+            : interaction.RespondWithFileAsync(stream, fileName, text);
 }
 
 public sealed class DmCommandInvocation(SocketMessage message, string name) : CommandInvocation

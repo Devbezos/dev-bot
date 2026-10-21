@@ -31,24 +31,31 @@ public partial class BotService
             return true;
         }
 
+        var (reminder, error) = CreateDmReminder(message.Author, title, dueUtc, "by DM");
+        if (reminder is null)
+            await message.Channel.SendMessageAsync($"⏰ Couldn't set that reminder: {error}");
+        else
+            await message.Channel.SendMessageAsync(ReminderSetText(reminder), components: CancelButton(reminder.Id));
+        return true;
+    }
+
+    /// <summary>Saves a one-time reminder for <paramref name="user"/>, from a DM or the New reminder form. Returns it, or why it couldn't be set.</summary>
+    private (Reminder? Reminder, string? Error) CreateDmReminder(IUser user, string title, DateTime dueUtc, string how)
+    {
         var reminder = new Reminder
         {
             Title = title,
-            DiscordUserId = message.Author.Id,
+            DiscordUserId = user.Id,
             // The dashboard's zone; the time itself is absolute, so this only decides how the Reminders tab shows it.
             TimeZone = "America/Toronto",
             RepeatEveryMinutes = 15,
         };
         ReminderTimeText.ScheduleOnce(reminder, dueUtc);
         if (ReminderSchedule.Validate(reminder) is { } error)
-        {
-            await message.Channel.SendMessageAsync($"⏰ Couldn't set that reminder: {error}");
-            return true;
-        }
+            return (null, error);
         reminder.Id = _reminderRepository.Create(reminder);
-        LogInfo($"Reminder {reminder.Id} '{reminder.Title}' set by DM from {message.Author.Username} for {reminder.NextDueUtc:u}");
-        await message.Channel.SendMessageAsync(ReminderSetText(reminder), components: CancelButton(reminder.Id));
-        return true;
+        LogInfo($"Reminder {reminder.Id} '{reminder.Title}' set {how} from {user.Username} for {reminder.NextDueUtc:u}");
+        return (reminder, null);
     }
 
     private static string ReminderSetText(Reminder reminder) =>
@@ -70,25 +77,18 @@ public partial class BotService
     private async Task HandleNewReminderForm(SocketModal modal)
     {
         string Field(string id) => modal.Data.Components.FirstOrDefault(c => c.CustomId == id)?.Value?.Trim() ?? "";
-        var what = Field(NewReminderWhatInputId);
-        var when = Field(ReminderTimeText.RescheduleInputId);
-        var nowUtc = DateTime.UtcNow;
-        if (!ReminderTimeText.TryParseWhen(when, nowUtc, LifeClock.Zone, out var dueUtc) || dueUtc <= nowUtc)
+        var form = DmMenu.ReadReminderForm(Field(NewReminderWhatInputId), Field(ReminderTimeText.RescheduleInputId), DateTime.UtcNow, LifeClock.Zone);
+        if (form.Request is not { } request)
         {
-            await modal.RespondAsync($"⏰ Couldn't read \"{when}\" as a time still to come. Try 30m, 2h, tomorrow 9am or 5:30pm, then press New reminder again.", ephemeral: true);
+            await modal.RespondAsync(form.Error, ephemeral: true);
             return;
         }
 
-        var reminder = new Reminder { Title = what, DiscordUserId = modal.User.Id, TimeZone = "America/Toronto", RepeatEveryMinutes = 15 };
-        ReminderTimeText.ScheduleOnce(reminder, dueUtc);
-        if (ReminderSchedule.Validate(reminder) is { } error)
-        {
+        var (reminder, error) = CreateDmReminder(modal.User, request.Title, request.DueUtc, "with the DM form");
+        if (reminder is null)
             await modal.RespondAsync($"⏰ Couldn't set that reminder: {error}", ephemeral: true);
-            return;
-        }
-        reminder.Id = _reminderRepository.Create(reminder);
-        LogInfo($"Reminder {reminder.Id} '{reminder.Title}' set with the DM form by {modal.User.Username} for {reminder.NextDueUtc:u}");
-        await modal.RespondAsync(ReminderSetText(reminder), components: CancelButton(reminder.Id));
+        else
+            await modal.RespondAsync(ReminderSetText(reminder), components: CancelButton(reminder.Id));
     }
 
     // Cancel (on a DM-made reminder's confirmation) and Reschedule (on one-time reminder DMs). Returns false for other buttons.
@@ -136,22 +136,23 @@ public partial class BotService
         return true;
     }
 
-    // The Reschedule form: moves the reminder to the new time and clears its DMs, so it nags again then.
-    private async Task HandleReminderModal(SocketModal modal)
+    // The New reminder and Reschedule forms. Reschedule moves the reminder to the new time and clears its DMs, so it nags
+    // again then. Returns false for other forms.
+    private async Task<bool> TryHandleReminderModal(SocketModal modal)
     {
         if (modal.Data.CustomId == NewReminderModalId)
         {
             await HandleNewReminderForm(modal);
-            return;
+            return true;
         }
         if (!ReminderTimeText.TryParseId(modal.Data.CustomId, ReminderTimeText.RescheduleModalPrefix, out var reminderId, out var dueTicks))
-            return;
+            return false;
 
         var reminder = _reminderRepository.Get(reminderId);
         if (reminder is null || reminder.DiscordUserId != modal.User.Id || reminder.NextDueUtc?.Ticks != dueTicks)
         {
             await modal.RespondAsync("⏰ That reminder was already dismissed or changed.", ephemeral: true);
-            return;
+            return true;
         }
 
         var input = modal.Data.Components.FirstOrDefault(c => c.CustomId == ReminderTimeText.RescheduleInputId)?.Value ?? "";
@@ -159,7 +160,7 @@ public partial class BotService
         if (!ReminderTimeText.TryParseWhen(input, nowUtc, ReminderSchedule.FindTimeZone(reminder.TimeZone), out var newDueUtc) || newDueUtc <= nowUtc)
         {
             await modal.RespondAsync($"⏰ Couldn't read \"{input}\" as a time still to come. Try 30m, 2h, tomorrow 9am or 5:30pm, then press Reschedule again.", ephemeral: true);
-            return;
+            return true;
         }
 
         var pending = reminder.PendingMessages;
@@ -169,5 +170,6 @@ public partial class BotService
 
         await modal.RespondAsync($"⏰ Rescheduled **{reminder.Title}** to {ReminderTimeText.Discord(reminder.NextDueUtc!.Value)}");
         await DeleteDiscordMessages(pending.Append($"{modal.Channel.Id}/{modal.Message?.Id}").Where(m => !m.EndsWith('/')).Distinct());
+        return true;
     }
 }

@@ -56,13 +56,20 @@ public partial class BotService
             {
                 if (interaction is SocketSlashCommand slashCommand)
                     await HandleSlashCommand(slashCommand);
-                else if (interaction is SocketMessageComponent component
-                    && !await TryHandleProgressCheckInButton(component)
-                    && !await TryHandleWaterButton(component)
-                    && !await TryHandleReminderExtraButton(component))
-                    await HandleReminderButton(component);
+                else if (interaction is SocketMessageComponent component)
+                {
+                    if (!await TryHandleDmMenuButton(component)
+                        && !await TryHandleProgressCheckInButton(component)
+                        && !await TryHandleWaterButton(component)
+                        && !await TryHandleReminderExtraButton(component)
+                        && !await TryHandleReminderButton(component))
+                        await RespondOutdated(component);
+                }
                 else if (interaction is SocketModal modal)
-                    await HandleReminderModal(modal);
+                {
+                    if (!await TryHandleDmMenuModal(modal) && !await TryHandleReminderModal(modal))
+                        await RespondOutdated(modal);
+                }
             }
             catch (Exception ex)
             {
@@ -81,16 +88,16 @@ public partial class BotService
 
     private Task HandleSlashCommand(SocketSlashCommand command) => RunSlashCommand(new SlashCommandInvocation(command));
 
-    // A DM whose whole text is a slash command's name runs it as if it were used with /. "commands" or "help"
-    // lists what this user can run, including their keyword commands.
+    // A DM whose whole text is a slash command's name runs it as if it were used with /. "commands", "help" or "menu"
+    // lists what this user can run, including their keyword commands, with a button for each.
     private async Task<bool> TryHandleDmSlashCommand(SocketMessage message)
     {
         var name = message.Content.Trim().TrimStart('/').Trim().ToLowerInvariant();
-        if (name is "commands" or "help")
+        if (DmMenu.MenuWords.Contains(name))
         {
             var lines = new List<string>
             {
-                "**Commands** (send just the word here, or use / in a server):",
+                "**Commands** (tap a button, send just the word here, or use / in a server):",
                 string.Join(", ", SlashCommandNames.Select(n => $"`{n}`")),
             };
             var keywordCommands = BotCommandsFor(message.Author.Id);
@@ -101,7 +108,7 @@ public partial class BotService
             }
             lines.Add("-# Log water by sending an amount like `500ml`.");
             lines.Add("-# Set a reminder with `!remind`, or send what and an @time, like `call mom` + @time.");
-            await message.Channel.SendMessageAsync(string.Join('\n', lines));
+            await message.Channel.SendMessageAsync(string.Join('\n', lines), components: DmMenu.BuildButtons(DmMenu.ItemsFor(SlashCommandNames, keywordCommands, message.Author.Id), page: 0));
             return true;
         }
 
@@ -149,7 +156,7 @@ public partial class BotService
             var guild = command.GuildId is { } guildId ? _discordBotClient.GetGuild(guildId) : null;
             _botActivityRepository.LogSlashCommand(
                 command.Name, command.User.Id, command.User.Username, command.GuildId, guild?.Name, command.Channel?.Id,
-                command is DmCommandInvocation ? "dm" : "slash", DateTime.UtcNow);
+                command is SlashCommandInvocation ? "slash" : "dm", DateTime.UtcNow);
         }
         catch (Exception ex)
         {

@@ -175,10 +175,11 @@ public partial class BotService
         return string.Join('\n', lines);
     }
 
-    private async Task HandleReminderButton(SocketMessageComponent component)
+    // Dismiss on a reminder DM. Returns false for other buttons.
+    private async Task<bool> TryHandleReminderButton(SocketMessageComponent component)
     {
         if (!ReminderSchedule.TryParseDismissButtonId(component.Data.CustomId, out var reminderId, out var dueTicks))
-            return;
+            return false;
 
         // Dismissing deletes the reminder DM (and any earlier nags for it), so nothing is left behind.
         await component.DeferAsync();
@@ -195,5 +196,6 @@ public partial class BotService
         }
 
         await DeleteDiscordMessages(toDelete.Distinct());
+        return true;
     }
 }

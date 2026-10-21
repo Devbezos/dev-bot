@@ -19,29 +19,41 @@ public partial class BotService
         if (!summaryOnly && !WaterRules.TryParseVolume(text, out amountMl))
             return false;
 
-        var userId = message.Author.Id;
-        if (!summaryOnly)
-            SaveWaterUser(message.Author);
+        if (summaryOnly)
+            await message.Channel.SendMessageAsync(WaterTodayText(message.Author.Id));
+        else
+            await LogWater(message.Author, message.Channel, amountMl, text);
+        return true;
+    }
 
+    /// <summary>"💧 Today: …" for the "water" DM and the menu's Water today button.</summary>
+    private string WaterTodayText(ulong userId)
+    {
+        var today = DateOnly.FromDateTime(LifeLocalNow()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return $"💧 Today: {DescribeWaterTotal(_waterRepository.GetTotal(userId, today), _waterRepository.GetSettings(userId))}";
+    }
+
+    /// <summary>
+    /// Logs a drink and shows the "Logged" message, for an amount DM'd as text or entered in the menu's Log water form.
+    /// Returns the message text, and whether an earlier message was edited instead of a new one being posted.
+    /// </summary>
+    private async Task<(string Text, bool EditedEarlier)> LogWater(IUser user, IMessageChannel channel, decimal amountMl, string sourceText)
+    {
+        var userId = user.Id;
+        SaveWaterUser(user);
         var today = DateOnly.FromDateTime(LifeLocalNow()).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var settings = _waterRepository.GetSettings(userId);
-        if (summaryOnly)
-        {
-            await message.Channel.SendMessageAsync($"💧 Today: {DescribeWaterTotal(_waterRepository.GetTotal(userId, today), settings)}");
-            return true;
-        }
-
-        var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, text);
+        var entryId = _waterRepository.Add(userId, amountMl, today, DateTime.UtcNow, sourceText);
         var total = _waterRepository.GetTotal(userId, today);
-        await ShowWaterMessage(userId, message.Channel,
-            $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}",
-            BuildWaterButtons(settings.Unit, entryId));
-        return true;
+        var text = $"💧 Logged **{WaterRules.Format(amountMl, settings.Unit)}**\nToday: {DescribeWaterTotal(total, settings)}";
+        var edited = await ShowWaterMessage(userId, channel, text, BuildWaterButtons(settings.Unit, entryId));
+        return (text, edited);
     }
 
     // Updates today's water message (the latest reminder or "Logged" message) in place instead of posting another;
     // bots can't delete the user's own DM, so their typed amount stays. Posts a new one when there's none from today.
-    private async Task ShowWaterMessage(ulong userId, IMessageChannel channel, string content, MessageComponent components)
+    // Returns true when an existing message was edited.
+    private async Task<bool> ShowWaterMessage(ulong userId, IMessageChannel channel, string content, MessageComponent components)
     {
         if (_waterRepository.GetWaterMessage(userId) is { } reference && await TryGetTodaysWaterMessage(reference, channel) is { } existing)
         {
@@ -52,7 +64,7 @@ public partial class BotService
                     m.Content = content;
                     m.Components = components;
                 });
-                return;
+                return true;
             }
             catch (Exception ex)
             {
@@ -62,6 +74,7 @@ public partial class BotService
 
         var sent = await channel.SendMessageAsync(content, components: components);
         _waterRepository.SetWaterMessage(userId, $"{channel.Id}/{sent.Id}");
+        return false;
     }
 
     private async Task<IUserMessage?> TryGetTodaysWaterMessage(string reference, IMessageChannel channel)

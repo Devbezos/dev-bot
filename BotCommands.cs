@@ -32,28 +32,32 @@ public partial class BotService
             return true;
         }
 
-        await RunBotCommand(command.Id, message, reference);
+        await RunBotCommand(command.Id, message.Author, message.Channel, reference);
         return true;
     }
 
-    private async Task RunBotCommand(int commandId, SocketMessage message, MessageReference reference)
+    /// <summary>
+    /// Runs a keyword command for <paramref name="user"/>, from its keyword or the DM menu, replying in <paramref name="channel"/>.
+    /// False when it no longer exists or they may no longer run it.
+    /// </summary>
+    private async Task<bool> RunBotCommand(int commandId, IUser user, IMessageChannel channel, MessageReference? reference)
     {
-        var start = _botCommandRunStarter.TryStart(commandId, message.Author.Id, DateTime.UtcNow);
-        if (start is null) return;
+        var start = _botCommandRunStarter.TryStart(commandId, user.Id, DateTime.UtcNow);
+        if (start is null) return false;
         var command = start.Command;
         if (start.Cooldown is { } wait)
         {
             var by = command.LastRunBy is { } userId ? $" by <@{userId}>" : "";
-            await message.Channel.SendMessageAsync(
+            await channel.SendMessageAsync(
                 $"**{command.Name}** was {(command.Action == "remote-task" ? "requested" : "run")}{by} <t:{new DateTimeOffset(command.LastRunUtc!.Value).ToUnixTimeSeconds()}:R>. " +
                 $"Try again in {Math.Ceiling(wait.TotalMinutes)} min.",
                 messageReference: reference, allowedMentions: AllowedMentions.None);
-            return;
+            return true;
         }
 
         var runId = start.RunId!.Value;
-        LogInfo($"Running bot command '{command.Name}' ({command.Action}) for {message.Author.Username} ({message.Author.Id})");
-        var reply = await message.Channel.SendMessageAsync($"Running **{command.Name}**...", messageReference: reference,
+        LogInfo($"Running bot command '{command.Name}' ({command.Action}) for {user.Username} ({user.Id})");
+        var reply = await channel.SendMessageAsync($"Running **{command.Name}**...", messageReference: reference,
             allowedMentions: AllowedMentions.None);
         _ = Task.Run(() => command.Action switch
         {
@@ -62,6 +66,7 @@ public partial class BotService
             "script" => RunScriptCommand(command, runId, reply),
             _ => Task.CompletedTask,
         });
+        return true;
     }
 
     private async Task RunRemoteTaskCommand(BotCommand command, int runId, IUserMessage reply)
