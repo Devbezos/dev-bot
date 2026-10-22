@@ -24,28 +24,41 @@ public class DmMenuTests
         Enumerable.Range(1, count).Select(i => new DmMenuItem($"kw:{i}", $"Command {i}", "⚙️", false)).ToList();
 
     [Fact]
-    public void EveryoneGetsRemindersWaterAndEverySlashCommand()
+    public void EveryoneGetsRemindersWaterAndTheUsefulSlashCommands()
     {
         var keys = DmMenu.ItemsFor(SlashCommandNames, [], UserId).Select(i => i.Key).ToList();
 
-        Assert.Equal(["reminder", "water", "water-today"], keys.Take(3));
-        Assert.Equal(SlashCommandNames.Select(n => $"cmd:{n}"), keys.Skip(3));
+        // Voice (summon/leave) and the quote commands still run when typed, but get no button.
+        Assert.Equal(["reminder", "water", "water-today", "cmd:macro", "cmd:rxp", "cmd:cat"], keys);
     }
 
     [Fact]
-    public void OnlyKeywordCommandsTheUserMayRunAreShown()
+    public void KeywordCommandsShareOneServerCommandsButton_WhenTheUserMayRunAny()
     {
         var commands = new[]
         {
             Keyword(1, "Restart Valheim", true, UserId),
-            Keyword(2, "Backup Palworld", true, 7),
-            Keyword(3, "Disabled one", false, UserId),
+            Keyword(2, "Restart Palworld", true, UserId),
+            Keyword(3, "Backup Palworld", true, 7),
         };
 
         var items = DmMenu.ItemsFor(SlashCommandNames, commands, UserId);
 
-        var keyword = Assert.Single(items, i => i.Key.StartsWith("kw:"));
-        Assert.Equal(("kw:1", "Restart Valheim"), (keyword.Key, keyword.Label));
+        Assert.DoesNotContain(items, i => i.Key.StartsWith("kw:"));
+        var server = Assert.Single(items, i => i.Key == DmMenu.ServerCommandsKey);
+        Assert.True(server.OpensForm);
+        Assert.DoesNotContain(DmMenu.ItemsFor(SlashCommandNames, [Keyword(3, "Backup Palworld", true, 7), Keyword(4, "Off", false, UserId)], UserId),
+            i => i.Key == DmMenu.ServerCommandsKey);
+    }
+
+    [Fact]
+    public void TheServerCommandsPickerListsEachCommandById()
+    {
+        var picker = DmMenu.BuildCommandPicker([Keyword(1, "Restart Valheim"), Keyword(12, "Restart Palworld")]);
+
+        var menu = Assert.IsType<SelectMenuComponent>(Assert.Single(((ActionRowComponent)Assert.Single(picker.Components)).Components));
+        Assert.Equal(DmMenu.CommandPickerId, menu.CustomId);
+        Assert.Equal([("Restart Valheim", "1"), ("Restart Palworld", "12")], menu.Options.Select(o => (o.Label, o.Value)));
     }
 
     [Fact]
@@ -53,8 +66,7 @@ public class DmMenuTests
     {
         var items = DmMenu.ItemsFor(SlashCommandNames, [], UserId);
 
-        Assert.Equal(["reminder", "water"], items.Where(i => i.OpensForm).Select(i => i.Key));
-    }
+        Assert.Equal(["reminder", "water"], items.Where(i => i.OpensForm).Select(i => i.Key));    }
 
     [Fact]
     public void UpToTwentyFiveButtonsFitOneMessageInRowsOfFive()

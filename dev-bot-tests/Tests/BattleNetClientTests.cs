@@ -30,7 +30,7 @@ namespace dev_bot_tests.Tests
             var handler = new FakeHandler(request => request.RequestUri!.Host == "oauth.battle.net"
                 ? Json("""{"access_token":"t"}""")
                 : respond(request));
-            return (new BattleNetClient(SharedHttp.Create(new HttpClient(handler))), handler);
+            return (new BattleNetClient(SharedHttp.Create(new HttpClient(handler)), cache: new ApiResponseCache()), handler);
         }
 
         [Fact]
@@ -78,6 +78,22 @@ namespace dev_bot_tests.Tests
             var (client, _) = Create(_ => Json("""{"code":404}""", HttpStatusCode.NotFound));
 
             await Assert.ThrowsAsync<HttpRequestException>(() => client.GetRealmStatus("us", "nope"));
+        }
+
+        [Fact]
+        public async Task GetRealmStatus_CachesTheRealmLink_ButAlwaysReadsTheStatus()
+        {
+            var down = true;
+            var (client, handler) = Create(request => request.RequestUri!.AbsolutePath.EndsWith("/realm/zuljin")
+                ? Json("""{"name":"Zul'jin","connected_realm":{"href":"https://us.api.blizzard.com/data/wow/connected-realm/61?namespace=dynamic-us"}}""")
+                : Json(down ? """{"status":{"type":"DOWN"}}""" : """{"status":{"type":"UP"}}"""));
+
+            Assert.Equal("DOWN", (await client.GetRealmStatus("us", "zuljin")).Status);
+            down = false;
+            Assert.Equal("UP", (await client.GetRealmStatus("us", "zuljin")).Status);
+
+            Assert.Single(handler.Urls, u => u.Contains("/realm/zuljin"));
+            Assert.Equal(2, handler.Urls.Count(u => u.Contains("/connected-realm/61")));
         }
     }
 }

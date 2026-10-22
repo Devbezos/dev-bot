@@ -151,14 +151,17 @@ public partial class BotService
 
     private async Task<RaidBotsCharacterIdentity> GetRaidBotsCharacterIdentity(string reportId)
     {
-        var request = new RestRequest($"https://www.raidbots.com/simbot/report/{reportId}/input.txt")
-            .AddHeader("User-Agent", RaidBotsUserAgent);
-        var response = await DroptimizerHttpClient.SendAsync(request);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            throw new HttpRequestException($"Raidbots input not found for {reportId}", null, response.StatusCode);
+        var url = $"https://www.raidbots.com/simbot/report/{reportId}/input.txt";
+        // A report's input never changes, so it's kept a day; failures aren't kept.
+        var simcText = await ApiResponseCache.Shared.GetOrFetch("raidbots:" + url, RaidBotsClient.ReportTtl, async () =>
+        {
+            var response = await DroptimizerHttpClient.SendAsync(new RestRequest(url).AddHeader("User-Agent", RaidBotsUserAgent));
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                throw new HttpRequestException($"Raidbots input not found for {reportId}", null, response.StatusCode);
 
-        response.EnsureSuccessStatusCode();
-        var simcText = response.Content ?? string.Empty;
+            response.EnsureSuccessStatusCode();
+            return response.Content ?? string.Empty;
+        });
 
         var classMatch = Regex.Match(simcText, "^([a-z_]+)=\"([^\"]+)\"", RegexOptions.Multiline | RegexOptions.IgnoreCase);
         var wowClass = classMatch.Success ? classMatch.Groups[1].Value : null;

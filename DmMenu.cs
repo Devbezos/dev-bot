@@ -30,6 +30,9 @@ public static partial class DmMenu
     public const string ReminderKey = "reminder";
     public const string WaterKey = "water";
     public const string WaterTodayKey = "water-today";
+    public const string ServerCommandsKey = "server-commands";
+    /// <summary>The dropdown the Server commands button opens; each option's value is a keyword command id.</summary>
+    public const string CommandPickerId = "menu:pick-command";
     public const string SlashKeyPrefix = "cmd:";
     public const string KeywordKeyPrefix = "kw:";
 
@@ -43,10 +46,9 @@ public static partial class DmMenu
 
     public const string OutdatedText = "That button or form is out of date (I may have restarted since). Send `menu` for a fresh one.";
 
+    /// <summary>The slash commands that get a button. Voice and the quote commands still run when typed, but aren't on the menu.</summary>
     private static readonly Dictionary<string, (string Label, string Emoji)> SlashLabels = new()
     {
-        ["summon"] = ("Join my voice channel", "🔊"),
-        ["leave"] = ("Leave voice", "👋"),
         ["macro"] = ("Macro", "🖼️"),
         ["rxp"] = ("RXPGuides file", "📦"),
         ["cat"] = ("Cat picture", "🐱"),
@@ -56,8 +58,8 @@ public static partial class DmMenu
     private static partial Regex BareNumber();
 
     /// <summary>
-    /// The buttons <paramref name="userId"/> gets: reminders and water (open to everyone, like their DMs), every slash
-    /// command, then the keyword commands they're allowed to run.
+    /// The buttons <paramref name="userId"/> gets: reminders and water (open to everyone, like their DMs), the slash
+    /// commands in <see cref="SlashLabels"/>, then one Server commands button when they may run any keyword command.
     /// </summary>
     public static IReadOnlyList<DmMenuItem> ItemsFor(IEnumerable<string> slashCommandNames, IEnumerable<BotCommand> keywordCommands, ulong userId)
     {
@@ -67,14 +69,25 @@ public static partial class DmMenu
             new(WaterKey, "Log water", "💧", OpensForm: true),
             new(WaterTodayKey, "Water today", "📊", OpensForm: false),
         };
-        items.AddRange(slashCommandNames.Select(name => SlashLabels.TryGetValue(name, out var known)
-            ? new DmMenuItem(SlashKeyPrefix + name, known.Label, known.Emoji, false)
-            : new DmMenuItem(SlashKeyPrefix + name, name, "💬", false)));
-        items.AddRange(keywordCommands
-            .Where(c => BotCommandRules.CanRun(c, userId))
-            .Select(c => new DmMenuItem($"{KeywordKeyPrefix}{c.Id}", c.Name.Length > 80 ? c.Name[..79] + "…" : c.Name, "⚙️", false)));
+        items.AddRange(slashCommandNames
+            .Where(SlashLabels.ContainsKey)
+            .Select(name => new DmMenuItem(SlashKeyPrefix + name, SlashLabels[name].Label, SlashLabels[name].Emoji, false)));
+        if (keywordCommands.Any(c => BotCommandRules.CanRun(c, userId)))
+            items.Add(new(ServerCommandsKey, "Server commands", "🖥️", OpensForm: true));
         return items;
     }
+
+    /// <summary>The Server commands dropdown: one option per command the user may run (Discord shows at most 25).</summary>
+    public static MessageComponent BuildCommandPicker(IEnumerable<BotCommand> runnable) =>
+        new ComponentBuilder()
+            .WithSelectMenu(new SelectMenuBuilder()
+                .WithCustomId(CommandPickerId)
+                .WithPlaceholder("Pick a command to run")
+                .WithOptions(runnable.Take(MaxButtons).Select(c => new SelectMenuOptionBuilder()
+                    .WithLabel(c.Name.Length > 100 ? c.Name[..99] + "…" : c.Name)
+                    .WithValue(c.Id.ToString(CultureInfo.InvariantCulture))
+                    .WithEmote(new Emoji("⚙️"))).ToList()))
+            .Build();
 
     public static int PageCount(int itemCount) =>
         itemCount <= MaxButtons ? 1 : (itemCount + PageSize - 1) / PageSize;
@@ -183,6 +196,19 @@ public partial class BotService
             await component.UpdateAsync(m => m.Components = DmMenu.BuildButtons(DmMenuItemsFor(user.Id), page));
             return true;
         }
+        if (customId == DmMenu.CommandPickerId)
+        {
+            if (!int.TryParse(component.Data.Values.FirstOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out var pickedId))
+            {
+                await RespondOutdated(component);
+                return true;
+            }
+            LogInfo($"DM menu server command {pickedId} from {user.Username} ({user.Id})");
+            await component.DeferAsync();
+            if (!await RunBotCommand(pickedId, user, await InteractionChannel(component), reference: null))
+                await component.FollowupAsync("That command was removed, or you're no longer allowed to run it. Send `menu` for an up-to-date list.", ephemeral: true);
+            return true;
+        }
         if (!DmMenu.TryParseRunId(customId, out var key))
         {
             await RespondOutdated(component);
@@ -200,6 +226,13 @@ public partial class BotService
                 return true;
             case DmMenu.WaterTodayKey:
                 await component.RespondAsync(WaterTodayText(user.Id));
+                return true;
+            case DmMenu.ServerCommandsKey:
+                var runnable = BotCommandsFor(user.Id);
+                if (runnable.Count == 0)
+                    await component.RespondAsync("You don't have any server commands you can run. Send `menu` for an up-to-date list.", ephemeral: true);
+                else
+                    await component.RespondAsync("🖥️ Which one?", components: DmMenu.BuildCommandPicker(runnable), ephemeral: true);
                 return true;
         }
 

@@ -241,7 +241,7 @@ public partial class BotService
         return !inDm || output.Length == 0 ? heading : $"{heading}\n```\n{Truncate(output, 1500).Replace("```", "'''")}\n```";
     }
 
-    /// <summary>The finished remote-task reply; the agent's output stays off Discord (it's on the Game servers page).</summary>
+    /// <summary>The finished remote-task reply; the agent's output stays off Discord (it's on the Server commands page).</summary>
     public static string RemoteTaskReply(string name, RemoteTaskResult result, bool dryRun) =>
         !result.Succeeded ? $"❌ Couldn't run **{name}**. {result.Message}"
         : dryRun ? $"**{name}** finished (dry run; no request sent)."

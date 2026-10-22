@@ -1,7 +1,7 @@
 using DevApi.Data;
 using Microsoft.Extensions.DependencyInjection;
 
-// Messages are safe for Discord and persisted run history: the agent's output stays on the Game servers page.
+// Messages are safe for Discord and persisted run history: the agent's output stays on the Server commands page.
 public sealed record RemoteTaskResult(bool Succeeded, int? ExitCode, string Message);
 
 /// <summary>
@@ -41,7 +41,7 @@ public sealed class RemoteTaskQueue(IGameAgentRepository agents, TimeSpan? wait 
                 case GameAgentRules.Succeeded:
                     return new(true, command.ExitCode, $"Done on {agent.Name}{exit}.");
                 case GameAgentRules.Failed:
-                    return new(false, command.ExitCode, $"{agent.Name} reported a failure{exit}. Its output is on the Game servers page.");
+                    return new(false, command.ExitCode, $"{agent.Name} reported a failure{exit}. Its output is on the Server commands page in the dashboard.");
                 case GameAgentRules.Expired:
                     return new(false, null, $"The agent didn't respond: {agent.Name} didn't pick it up within a minute. Check that it's running.");
             }
