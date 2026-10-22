@@ -153,32 +153,11 @@ public partial class BotService : BackgroundService
     {
         LogInfo("Starting");
 
-        _appChannelRepository.EnsureTable();
-        _guildRepository.EnsureTable();
-        _autoReactionRepository.EnsureTable();
-        _fitnessRepository.EnsureTable();
-        _jobRepository.EnsureTable();
-        _tcgSourceUrlRepository.EnsureTable();
-        _tcgHiddenItemRepository.EnsureTable();
-        _tcgBlacklistWordRepository.EnsureTable();
-        _tcgChannelSettingsRepository.EnsureTable();
-        _tcgProductGroupRepository.EnsureTable();
-        _tcgMessageStateRepository.EnsureTable();
-        _pokemonCenterSecurityStateRepository.EnsureTable();
-        _rxpGuidesWatchRepository.EnsureTable(AppSettings.RxpGuidesWatchThreadUrl);
-        _reminderRepository.EnsureTable();
-        _discordUserRepository.EnsureTable();
-        _goalRepository.EnsureTables();
-        _progressRepository.EnsureTable();
-        _progressCheckInRepository.EnsureTable();
-        _botCommandRepository.EnsureTables();
-        _waterRepository.EnsureTables();
-        _botActivityRepository.EnsureTables();
-        _stepUpdateRepository.EnsureTable();
-        _calendarReminderRepository.EnsureTables();
-        _discordDirectoryRepository.EnsureTables();
-        _fitnessHistoryRepository.EnsureTable();
-        _hevyRepository.EnsureTables();
+        // Brings the schema up to date (the API runs the same migrations; a MySQL lock makes whichever starts second wait),
+        // then adds the default rows the bot relies on.
+        DatabaseMigrator.Run(AppSettings.MySql.ConnectionString);
+        _jobRepository.EnsureDefaults();
+        _rxpGuidesWatchRepository.EnsureDefault(AppSettings.RxpGuidesWatchThreadUrl);
         _guildRepository.SyncFromSettings(AppSettings.Guilds);
         AppSettings.Guilds = _guildRepository.LoadAsGuildSettings();
         _autoReactionRules = _autoReactionRepository.GetAll();

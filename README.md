@@ -2,7 +2,7 @@
 
 ## Remote game-server tasks
 
-DM commands use the existing Commands page, allowed Discord users, cooldown and run history. Local Task Scheduler and script actions still run on the bot machine. Choose **Remote TaskAgent** to run a predefined alias on a home game server through the [game agent](tools/game-agent/README.md).
+DM commands use the existing Commands page, allowed Discord users, cooldown and run history. Local Task Scheduler and script actions still run on the bot machine. Choose **Remote TaskAgent** to run a predefined alias through the game agent installed on your home server.
 
 Nothing connects to the home network. The agent holds an outbound HTTPS long-poll to the API (through the dashboard, which proxies `/api`). When an allowed user sends the keyword, the bot:
 
@@ -16,7 +16,7 @@ The Discord reply and run history get a short summary (agent name, exit code), n
 Setup:
 
 1. On the dashboard's **Game servers** page (admins only), add an agent and copy its `dga_...` token. It's shown once.
-2. Install the agent on the home server and list the alias in its config, as in its [README](tools/game-agent/README.md).
+2. On the home server, list the alias in the installed agent's config.
 3. In Commands, edit the existing Valheim command, which keeps its allowed users and history:
    - Name: `Restart Valheim`
    - Keyword: `restart valheim`

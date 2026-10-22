@@ -1,7 +1,0 @@
-{
-  "apiBaseUrl": "https://devbot.gruulsgonewild.com",
-  "tokenFile": "token.txt",
-  "actions": {
-    "valheim": { "argv": ["docker", "restart", "valheim"], "timeoutSeconds": 120 }
-  }
-}
