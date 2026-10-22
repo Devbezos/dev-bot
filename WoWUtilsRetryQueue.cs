@@ -4,12 +4,12 @@ using DevClient.Data.WoW.WoWUtils;
 using Discord;
 using Discord.WebSocket;
 using System.Net;
-using System.Text.Json;
+using Newtonsoft.Json;
 
 public partial class BotService
 {
     private static readonly object WoWUtilsRetryQueueLock = new();
-    private static readonly JsonSerializerOptions WoWUtilsRetryQueueJsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerSettings WoWUtilsRetryQueueJsonOptions = new() { Formatting = Formatting.Indented };
     private static readonly TimeSpan WoWUtilsRetryDelay = TimeSpan.FromMinutes(60);
     private static string WoWUtilsRetryQueuePath => Path.Combine(AppContext.BaseDirectory, "data", "wowutils-import-queue.json");
 
@@ -222,7 +222,7 @@ public partial class BotService
         if (string.IsNullOrWhiteSpace(json))
             return [];
 
-        return JsonSerializer.Deserialize<List<WoWUtilsQueuedImport>>(json) ?? [];
+        return JsonConvert.DeserializeObject<List<WoWUtilsQueuedImport>>(json) ?? [];
     }
 
     private static void SaveWoWUtilsRetryQueue(List<WoWUtilsQueuedImport> queue)
@@ -233,7 +233,7 @@ public partial class BotService
 
         File.WriteAllText(
             WoWUtilsRetryQueuePath,
-            JsonSerializer.Serialize(queue.OrderBy(x => x.RetryAtUtc).ToList(), WoWUtilsRetryQueueJsonOptions));
+            JsonConvert.SerializeObject(queue.OrderBy(x => x.RetryAtUtc).ToList(), WoWUtilsRetryQueueJsonOptions));
     }
 
     private async Task TryReactToQueuedWoWUtilsMessage(ulong channelId, ulong messageId, IEmote emote)

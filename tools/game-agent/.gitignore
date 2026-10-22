@@ -1,0 +1,4 @@
+# The real config and the agent token stay on the home server.
+config.json
+token.txt
+*.token

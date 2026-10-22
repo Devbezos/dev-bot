@@ -1,4 +1,8 @@
-using System.Text.Json;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using DevClient.Clients;
+using DevClient.Data;
+using RestSharp;
 using Discord;
 using Discord.WebSocket;
 
@@ -12,10 +16,14 @@ public sealed class CatImageFetcher
     // Discord's default upload limit for bots.
     public const long MaxImageBytes = 8 * 1024 * 1024;
 
-    private readonly HttpClient _http;
+    private readonly RestClient _http;
     private readonly Action<string> _logWarn;
 
-    public CatImageFetcher(HttpClient http, Action<string> logWarn)
+    public CatImageFetcher(HttpClient http, Action<string> logWarn) : this(SharedHttp.Create(http), logWarn)
+    {
+    }
+
+    public CatImageFetcher(RestClient http, Action<string> logWarn)
     {
         _http = http;
         _logWarn = logWarn;
@@ -35,26 +43,36 @@ public sealed class CatImageFetcher
             if (string.IsNullOrWhiteSpace(imageUrl))
                 return null;
 
-            using var response = await _http.GetAsync(imageUrl, HttpCompletionOption.ResponseHeadersRead);
-            var contentType = response.Content.Headers.ContentType?.MediaType;
-            if (!response.IsSuccessStatusCode || contentType is null || !contentType.StartsWith("image/"))
+            CatImage? image = null;
+            var request = new RestRequest(imageUrl)
             {
-                _logWarn($"Cat image unusable: url={imageUrl}, status={(int)response.StatusCode}, type={contentType}");
-                return null;
-            }
+                CompletionOption = HttpCompletionOption.ResponseHeadersRead,
+                AdvancedResponseWriter = (response, restRequest) =>
+                {
+                    var contentType = response.Content.Headers.ContentType?.MediaType;
+                    if (!response.IsSuccessStatusCode || contentType is null || !contentType.StartsWith("image/"))
+                    {
+                        _logWarn($"Cat image unusable: url={imageUrl}, status={(int)response.StatusCode}, type={contentType}");
+                        return new RestResponse(restRequest) { StatusCode = response.StatusCode };
+                    }
 
-            // Check the declared size first so oversized files are rejected without downloading them.
-            if (response.Content.Headers.ContentLength > MaxImageBytes)
-            {
-                _logWarn($"Cat image too large: url={imageUrl}, bytes={response.Content.Headers.ContentLength}");
-                return null;
-            }
+                    // Check the declared size first so oversized files are rejected without downloading them.
+                    if (response.Content.Headers.ContentLength > MaxImageBytes)
+                    {
+                        _logWarn($"Cat image too large: url={imageUrl}, bytes={response.Content.Headers.ContentLength}");
+                        return new RestResponse(restRequest) { StatusCode = response.StatusCode };
+                    }
 
-            var bytes = await response.Content.ReadAsByteArrayAsync();
-            if (bytes.Length == 0 || bytes.Length > MaxImageBytes)
-                return null;
+                    var bytes = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+                    if (bytes.Length == 0 || bytes.Length > MaxImageBytes)
+                        return new RestResponse(restRequest) { StatusCode = response.StatusCode };
 
-            return new CatImage(bytes, $"cat{GetExtension(imageUrl, contentType)}");
+                    image = new CatImage(bytes, $"cat{GetExtension(imageUrl, contentType)}");
+                    return new RestResponse(restRequest) { StatusCode = response.StatusCode };
+                }
+            };
+            await _http.SendAsync(request);
+            return image;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or UriFormatException or InvalidOperationException)
         {
@@ -66,11 +84,10 @@ public sealed class CatImageFetcher
     // The API returns an array like [{"id":"abc","url":"https://cdn2.thecatapi.com/images/abc.jpg",...}].
     private async Task<string?> GetRandomImageUrlAsync()
     {
-        using var stream = await _http.GetStreamAsync(ApiUrl);
-        using var json = await JsonDocument.ParseAsync(stream);
-        if (json.RootElement.ValueKind != JsonValueKind.Array || json.RootElement.GetArrayLength() == 0)
+        var json = RawJson.Parse(await _http.GetStringAsync(ApiUrl));
+        if (json is not JArray { Count: > 0 } images)
             return null;
-        return json.RootElement[0].GetProperty("url").GetString();
+        return images[0].Str("url");
     }
 
     // Prefer the URL's extension so GIFs stay animated; fall back to the content type.
@@ -87,7 +104,8 @@ public partial class BotService
 {
     private const string CatCommandName = "cat";
     private const int CatMaxAttempts = 3;
-    private static readonly HttpClient CatHttpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly RestClient CatHttpClient = SharedHttp.Create(
+        new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }, TimeSpan.FromSeconds(10));
 
     private static SlashCommandBuilder BuildCatCommand() =>
         new SlashCommandBuilder()

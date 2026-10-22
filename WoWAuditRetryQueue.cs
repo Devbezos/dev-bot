@@ -3,12 +3,12 @@ using DevClient.Data.WoW.WoWAudit;
 using Discord;
 using Discord.WebSocket;
 using System.Net;
-using System.Text.Json;
+using Newtonsoft.Json;
 
 public partial class BotService
 {
     private static readonly object WoWAuditRetryQueueLock = new();
-    private static readonly JsonSerializerOptions WoWAuditRetryQueueJsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerSettings WoWAuditRetryQueueJsonOptions = new() { Formatting = Formatting.Indented };
     private static readonly TimeSpan WoWAuditRetryDelay = TimeSpan.FromMinutes(60);
     private static string WoWAuditRetryQueuePath => Path.Combine(AppContext.BaseDirectory, "data", "wowaudit-import-queue.json");
 
@@ -226,7 +226,7 @@ public partial class BotService
         if (string.IsNullOrWhiteSpace(json))
             return [];
 
-        return JsonSerializer.Deserialize<List<WoWAuditQueuedImport>>(json) ?? [];
+        return JsonConvert.DeserializeObject<List<WoWAuditQueuedImport>>(json) ?? [];
     }
 
     private static void SaveWoWAuditRetryQueue(List<WoWAuditQueuedImport> queue)
@@ -237,7 +237,7 @@ public partial class BotService
 
         File.WriteAllText(
             WoWAuditRetryQueuePath,
-            JsonSerializer.Serialize(queue.OrderBy(x => x.RetryAtUtc).ToList(), WoWAuditRetryQueueJsonOptions));
+            JsonConvert.SerializeObject(queue.OrderBy(x => x.RetryAtUtc).ToList(), WoWAuditRetryQueueJsonOptions));
     }
 }
 

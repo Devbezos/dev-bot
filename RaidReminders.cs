@@ -1,11 +1,11 @@
 using DevClient.Data;
 using DevClient.Data.WoW;
-using System.Text.Json;
+using Newtonsoft.Json;
 using TimeZoneConverter;
 
 public partial class BotService
 {
-    private static readonly JsonSerializerOptions RaidReminderJsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerSettings RaidReminderJsonOptions = new() { Formatting = Formatting.Indented };
     private static readonly object RaidReminderStateLock = new();
     private static string RaidReminderStatePath => Path.Combine(AppContext.BaseDirectory, "data", "raid-reminders.json");
 
@@ -217,7 +217,7 @@ public partial class BotService
             if (string.IsNullOrWhiteSpace(json))
                 return new RaidReminderState(new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase));
 
-            var raw = JsonSerializer.Deserialize<Dictionary<string, DateTime>>(json)
+            var raw = JsonConvert.DeserializeObject<Dictionary<string, DateTime>>(json)
                 ?? new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
             return new RaidReminderState(new Dictionary<string, DateTime>(raw, StringComparer.OrdinalIgnoreCase));
@@ -236,7 +236,7 @@ public partial class BotService
                 .Where(entry => entry.Value >= DateTime.UtcNow.AddDays(-30))
                 .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
 
-            File.WriteAllText(RaidReminderStatePath, JsonSerializer.Serialize(retained, RaidReminderJsonOptions));
+            File.WriteAllText(RaidReminderStatePath, JsonConvert.SerializeObject(retained, RaidReminderJsonOptions));
         }
     }
 

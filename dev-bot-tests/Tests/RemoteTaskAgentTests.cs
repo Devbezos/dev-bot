@@ -1,160 +1,104 @@
-using System.Net;
 using DevApi.Data;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Http;
-using Microsoft.Extensions.Options;
 using Moq;
 
 namespace dev_bot_tests.Tests;
 
-public class RemoteTaskAgentTests
+/// <summary>Remote tasks go through the database queue the home agent long-polls; the bot never connects to it.</summary>
+public class RemoteTaskQueueTests
 {
-    private sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    private const ulong User = 123456789012345678;
+    private readonly Mock<IGameAgentRepository> _repo = new();
+
+    private static GameAgent Agent(int id, string name, bool online = true, params string[] actions) =>
+        new(id, name, new string('a', 64), actions, DateTime.UtcNow, online ? DateTime.UtcNow : DateTime.UtcNow.AddMinutes(-10), null);
+
+    private static GameAgentCommand Command(string status, int? exitCode = null, string? result = null) =>
+        new(9, 1, "home", "valheim", User.ToString(), status, DateTime.UtcNow, DateTime.UtcNow.AddMinutes(1), null, null, result, exitCode, 42);
+
+    private RemoteTaskQueue Queue(params GameAgent[] agents)
     {
-        public int Calls { get; private set; }
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Calls++;
-            return send(request, cancellationToken);
-        }
+        _repo.Setup(r => r.GetAll()).Returns(agents.ToList());
+        _repo.Setup(r => r.Queue(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<DateTime>())).Returns(9);
+        return new(_repo.Object, TimeSpan.FromMilliseconds(300), TimeSpan.FromMilliseconds(10));
     }
 
-    private static RemoteTaskAgentOptions Settings() => new() { BaseUrl = "http://taskagent.test:5047/", ApiKey = "test-secret" };
-    private static RemoteTaskAgentClient Client(StubHandler handler, RemoteTaskAgentOptions? settings = null) =>
-        new(new HttpClient(handler), Options.Create(settings ?? Settings()));
+    private void VerifyNothingQueued() =>
+        _repo.Verify(r => r.Queue(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<DateTime>()), Times.Never);
 
-    [Theory]
-    [InlineData("valheim", "/api/tasks/valheim/run")]
-    [InlineData("valheim backup", "/api/tasks/valheim%20backup/run")]
-    public async Task PostsEscapedAliasWithBearerAndNoBody(string alias, string path)
+    [Fact]
+    public async Task QueuesTheAliasForTheOnlyAgent_AndReportsDoneWithoutItsOutput()
     {
-        var handler = new StubHandler((request, _) =>
-        {
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("http://taskagent.test:5047" + path, request.RequestUri!.AbsoluteUri);
-            Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
-            Assert.Equal("test-secret", request.Headers.Authorization.Parameter);
-            Assert.Null(request.Content);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new StringContent($$"""{"message":"Task '{{alias}}' started."}"""),
-            });
-        });
-        var result = await Client(handler).RunAsync(alias);
+        var queue = Queue(Agent(1, "home"));
+        _repo.Setup(r => r.GetCommand(9)).Returns(Command("succeeded", 0, "secret token=abc /home/steam/path"));
+
+        var result = await queue.RunAsync("valheim", User, 42);
+
         Assert.True(result.Succeeded);
-        Assert.Equal(202, result.StatusCode);
-        Assert.Contains($"Task '{alias}' started.", result.Message);
-        Assert.Contains("completion is not confirmed", result.Message);
-        Assert.Equal(1, handler.Calls);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("Done on home (exit code 0).", result.Message);
+        _repo.Verify(r => r.Queue(1, "valheim", User.ToString(), 42, It.IsAny<DateTime>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task WithSeveralAgents_RoutesToTheOneThatOffersTheAlias()
+    {
+        var queue = Queue(Agent(1, "a", true, "palworld"), Agent(2, "b", true, "valheim"));
+        _repo.Setup(r => r.GetCommand(9)).Returns(Command("succeeded"));
+
+        Assert.True((await queue.RunAsync("valheim", User, 42)).Succeeded);
+        _repo.Verify(r => r.Queue(2, "valheim", It.IsAny<string>(), 42, It.IsAny<DateTime>()), Times.Once);
     }
 
     [Theory]
-    [InlineData("", "test-secret", 15)]
-    [InlineData("http://taskagent.test/", "", 15)]
-    [InlineData("file:///tasks/", "test-secret", 15)]
-    [InlineData("http://user:password@taskagent.test/", "test-secret", 15)]
-    [InlineData("http://taskagent.test/?secret=x", "test-secret", 15)]
-    [InlineData("http://taskagent.test/#fragment", "test-secret", 15)]
-    [InlineData("http://taskagent.test/", "bad\r\nheader", 15)]
-    [InlineData("http://taskagent.test/", "test-secret", 0)]
-    [InlineData("http://taskagent.test/", "test-secret", 61)]
-    public async Task InvalidConfigurationDoesNotSend(string url, string key, int seconds)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NoOnlineAgentOfferingIt_FailsClearly_WithoutQueueing(bool several)
     {
-        var handler = new StubHandler((_, _) => throw new Exception("Must not send"));
-        var result = await Client(handler, new() { BaseUrl = url, ApiKey = key, TimeoutSeconds = seconds }).RunAsync("valheim");
+        var queue = several ? Queue(Agent(1, "a", true, "palworld"), Agent(2, "b", false, "valheim")) : Queue(Agent(1, "home", online: false));
+
+        var result = await queue.RunAsync("valheim", User, 42);
+
         Assert.False(result.Succeeded);
-        Assert.Equal(0, handler.Calls);
-        Assert.Contains("configuration", result.Message);
+        Assert.Contains(several ? "No online home agent offers 'valheim'" : "offline", result.Message);
+        VerifyNothingQueued();
     }
 
     [Theory]
     [InlineData(@"\Servers\ValheimRestart")]
     [InlineData("../valheim")]
-    [InlineData("valheim/run")]
-    [InlineData("valheim?token=secret")]
-    public async Task TaskPathsAndUnconfiguredPathSyntaxAreRejected(string alias)
+    [InlineData("valheim; rm -rf /")]
+    public async Task PathsAndShellSyntax_AreNeverQueued(string alias)
     {
-        var handler = new StubHandler((_, _) => throw new Exception("Must not send"));
-        Assert.False((await Client(handler).RunAsync(alias)).Succeeded);
-        Assert.Equal(0, handler.Calls);
+        Assert.False((await Queue(Agent(1, "home")).RunAsync(alias, User, 42)).Succeeded);
+        VerifyNothingQueued();
     }
 
     [Theory]
-    [InlineData(200, "not JSON")]
-    [InlineData(201, "{}")]
-    [InlineData(204, "")]
-    [InlineData(299, "{\"message\":\"secret token http://private/path\"}")]
-    public async Task Every2xxSucceedsWithoutLeakingUnexpectedBody(int status, string body)
+    [InlineData("failed", "reported a failure (exit code 3)")]
+    [InlineData("expired", "The agent didn't respond")]
+    [InlineData("claimed", "hasn't reported back")]
+    [InlineData("queued", "hasn't picked it up")]
+    public async Task FailuresAndSilence_GiveSafeMessages(string status, string expected)
     {
-        var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent(body) }));
-        var result = await Client(handler).RunAsync("valheim");
-        Assert.True(result.Succeeded);
-        Assert.DoesNotContain("secret", result.Message);
-        Assert.DoesNotContain("http", result.Message);
-    }
+        var queue = Queue(Agent(1, "home"));
+        _repo.Setup(r => r.GetCommand(9)).Returns(Command(status, status == "failed" ? 3 : null, "Traceback: password=hunter2"));
 
-    [Theory]
-    [InlineData(401)]
-    [InlineData(404)]
-    [InlineData(500)]
-    [InlineData(302)]
-    public async Task FailuresExposeOnlySafeStatusMessagesAndDoNotRetry(int status)
-    {
-        var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status)
-        {
-            Content = new StringContent("secret token http://private/path stack trace"),
-        }));
-        var result = await Client(handler).RunAsync("valheim");
+        var result = await queue.RunAsync("valheim", User, 42);
+
         Assert.False(result.Succeeded);
-        Assert.Equal(status, result.StatusCode);
-        Assert.DoesNotContain("secret", result.Message);
-        Assert.DoesNotContain("http://", result.Message);
-        Assert.Equal(1, handler.Calls);
+        Assert.Contains(expected, result.Message);
+        Assert.DoesNotContain("hunter2", result.Message);
+        _repo.Verify(r => r.ExpireStale(It.IsAny<DateTime>()), Times.AtLeastOnce);
     }
 
     [Fact]
-    public async Task TimeoutStopsRequestAndDoesNotLeakExceptionDetails()
+    public void Replies_SayDoneOrWhatWentWrong()
     {
-        var handler = new StubHandler(async (_, ct) =>
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-            throw new InvalidOperationException("Unreachable");
-        });
-        var settings = Settings();
-        settings.TimeoutSeconds = 1;
-        var result = await Client(handler, settings).RunAsync("valheim");
-        Assert.False(result.Succeeded);
-        Assert.Contains("timeout", result.Message);
-        Assert.Equal(1, handler.Calls);
-    }
-
-    [Fact]
-    public async Task NetworkFailuresDoNotLeakExceptionDetails()
-    {
-        var handler = new StubHandler((_, _) => throw new HttpRequestException("secret token http://private/path"));
-        var result = await Client(handler).RunAsync("valheim");
-        Assert.False(result.Succeeded);
-        Assert.DoesNotContain("secret", result.Message);
-        Assert.DoesNotContain("http", result.Message);
-    }
-
-    [Fact]
-    public void RegistrationDisablesRedirectsAndRedactsAuthorization()
-    {
-        var services = new ServiceCollection();
-        services.AddRemoteTaskAgent(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["remoteTaskAgent:baseUrl"] = "http://taskagent.test/",
-            ["remoteTaskAgent:apiKey"] = "test-secret",
-        }).Build());
-        using var provider = services.BuildServiceProvider();
-        var options = provider.GetRequiredService<IOptionsMonitor<HttpClientFactoryOptions>>().Get(nameof(RemoteTaskAgentClient));
-        var handler = provider.GetRequiredService<IHttpMessageHandlerFactory>().CreateHandler(nameof(RemoteTaskAgentClient));
-        while (handler is DelegatingHandler delegating) handler = delegating.InnerHandler!;
-        Assert.False(Assert.IsType<HttpClientHandler>(handler).AllowAutoRedirect);
-        Assert.True(options.ShouldRedactHeaderValue("Authorization"));
-        Assert.Equal(15, provider.GetRequiredService<IOptions<RemoteTaskAgentOptions>>().Value.TimeoutSeconds);
+        Assert.Equal("✅ **Restart Valheim**: Done on home (exit code 0).",
+            BotService.RemoteTaskReply("Restart Valheim", new(true, 0, "Done on home (exit code 0)."), dryRun: false));
+        Assert.Equal("❌ Couldn't run **Restart Valheim**. The agent didn't respond: home didn't pick it up within a minute. Check that it's running.",
+            BotService.RemoteTaskReply("Restart Valheim", new(false, null, "The agent didn't respond: home didn't pick it up within a minute. Check that it's running."), dryRun: false));
+        Assert.Contains("dry run", BotService.RemoteTaskReply("Restart Valheim", new(true, null, "[DRY RUN]"), dryRun: true));
     }
 }
 

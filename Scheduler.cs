@@ -4,7 +4,7 @@ using DevClient.Clients.Fitness;
 using DevClient.Data;
 using DevClient.Data.Fitness;
 using Discord;
-using System.Text.Json;
+using Newtonsoft.Json;
 using System.Text.RegularExpressions;
 using TimeZoneConverter;
 
@@ -14,7 +14,7 @@ public partial class BotService
     private const int DiscordMessageSoftLimit = 1800;
     private static readonly Regex LanguageRegex = new("japanese|french|korean|chinese|german|spanish|portuguese", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly object TcgNotificationStateLock = new();
-    private static readonly JsonSerializerOptions TcgNotificationJsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerSettings TcgNotificationJsonOptions = new() { Formatting = Formatting.Indented };
     private static string TcgNotificationStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-notified-products.json");
     private static readonly object TcgChannelPostStateLock = new();
     private static string TcgChannelPostStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-channel-post-state.json");
@@ -158,7 +158,7 @@ public partial class BotService
         if (string.IsNullOrWhiteSpace(json))
             return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
-        var raw = JsonSerializer.Deserialize<Dictionary<string, string[]>>(json)
+        var raw = JsonConvert.DeserializeObject<Dictionary<string, string[]>>(json)
             ?? new Dictionary<string, string[]>();
 
         return raw.ToDictionary(
@@ -178,7 +178,7 @@ public partial class BotService
             x => x.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToArray(),
             StringComparer.OrdinalIgnoreCase);
 
-        File.WriteAllText(TcgNotificationStatePath, JsonSerializer.Serialize(raw, TcgNotificationJsonOptions));
+        File.WriteAllText(TcgNotificationStatePath, JsonConvert.SerializeObject(raw, TcgNotificationJsonOptions));
     }
 
     private static bool ProductSetChangedForChannel(string settingsKey, ulong channelId, List<Search> latest)
@@ -227,7 +227,7 @@ public partial class BotService
         if (string.IsNullOrWhiteSpace(json))
             return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
-        var raw = JsonSerializer.Deserialize<Dictionary<string, string[]>>(json)
+        var raw = JsonConvert.DeserializeObject<Dictionary<string, string[]>>(json)
             ?? new Dictionary<string, string[]>();
 
         return raw.ToDictionary(
@@ -247,7 +247,7 @@ public partial class BotService
             x => x.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToArray(),
             StringComparer.OrdinalIgnoreCase);
 
-        File.WriteAllText(TcgChannelPostStatePath, JsonSerializer.Serialize(raw, TcgNotificationJsonOptions));
+        File.WriteAllText(TcgChannelPostStatePath, JsonConvert.SerializeObject(raw, TcgNotificationJsonOptions));
     }
 
     private static ulong? GetLatestChannelAlertMessageId(string settingsKey, ulong channelId)
@@ -280,7 +280,7 @@ public partial class BotService
         if (string.IsNullOrWhiteSpace(json))
             return new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
 
-        return JsonSerializer.Deserialize<Dictionary<string, ulong>>(json)
+        return JsonConvert.DeserializeObject<Dictionary<string, ulong>>(json)
             ?? new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -294,7 +294,7 @@ public partial class BotService
             .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
 
-        File.WriteAllText(TcgChannelAlertStatePath, JsonSerializer.Serialize(ordered, TcgNotificationJsonOptions));
+        File.WriteAllText(TcgChannelAlertStatePath, JsonConvert.SerializeObject(ordered, TcgNotificationJsonOptions));
     }
 
     private async Task NotifyNewProducts(string label, string settingsKey, List<(string Store, Product Product)> newProducts)

@@ -62,42 +62,38 @@ public partial class BotService
         _ = Task.Run(() => command.Action switch
         {
             "task" => RunTaskCommand(command, runId, reply),
-            "remote-task" => RunRemoteTaskCommand(command, runId, reply),
+            "remote-task" => RunRemoteTaskCommand(command, runId, user.Id, reply),
             "script" => RunScriptCommand(command, runId, reply),
             _ => Task.CompletedTask,
         });
         return true;
     }
 
-    private async Task RunRemoteTaskCommand(BotCommand command, int runId, IUserMessage reply)
+    private async Task RunRemoteTaskCommand(BotCommand command, int runId, ulong requestedBy, IUserMessage reply)
     {
-        RemoteTaskAgentResult result;
+        RemoteTaskResult result;
         try
         {
             result = AppSettings.DryRun
                 ? new(true, null, "[DRY RUN] Remote task not requested.")
-                : await _remoteTaskAgentClient.RunAsync(command.Target);
+                : await _remoteTaskQueue.RunAsync(command.Target, requestedBy, runId);
         }
         catch (Exception ex)
         {
-            // Exception messages can include URLs and credentials. Retain only the exception type.
+            // Exception messages can include connection details. Retain only the exception type.
             LogWarn($"Remote task command {command.Id} failed ({ex.GetType().Name}).");
             result = new(false, null, "Could not confirm the task request. Check the game server before retrying.");
         }
 
-        _botCommandRepository.FinishRun(runId, result.Succeeded, null,
-            result.StatusCode is { } status ? $"HTTP {status}: {result.Message}" : result.Message, DateTime.UtcNow);
-        if (!result.Succeeded)
-            LogWarn($"Remote task command {command.Id} failed (HTTP {result.StatusCode?.ToString() ?? "unavailable"}).");
+        _botCommandRepository.FinishRun(runId, result.Succeeded, result.ExitCode, result.Message, DateTime.UtcNow);
+        LogInfo($"Remote task '{command.Target}' (command {command.Id}, run {runId}) for user {requestedBy}: "
+            + $"{(result.Succeeded ? "succeeded" : "failed")}, exit code {result.ExitCode?.ToString() ?? "none"}");
         try
         {
             await reply.ModifyAsync(m =>
             {
                 m.AllowedMentions = AllowedMentions.None;
-                m.Content = result.Succeeded
-                    ? AppSettings.DryRun ? $"**{command.Name}** finished (dry run; no request sent)."
-                        : $"✅ {command.Name} was requested on the game server."
-                    : $"Couldn't request **{command.Name}**. {result.Message}";
+                m.Content = RemoteTaskReply(command.Name, result, AppSettings.DryRun);
             });
         }
         catch (Exception ex)
@@ -244,6 +240,12 @@ public partial class BotService
         var heading = exitCode == 0 ? $"✅ **{name}** finished." : $"❌ **{name}** failed (exit code {exitCode}).";
         return !inDm || output.Length == 0 ? heading : $"{heading}\n```\n{Truncate(output, 1500).Replace("```", "'''")}\n```";
     }
+
+    /// <summary>The finished remote-task reply; the agent's output stays off Discord (it's on the Game servers page).</summary>
+    public static string RemoteTaskReply(string name, RemoteTaskResult result, bool dryRun) =>
+        !result.Succeeded ? $"❌ Couldn't run **{name}**. {result.Message}"
+        : dryRun ? $"**{name}** finished (dry run; no request sent)."
+        : $"✅ **{name}**: {result.Message}";
 
     private static async Task<bool> WaitForExit(Process process, TimeSpan timeout)
     {

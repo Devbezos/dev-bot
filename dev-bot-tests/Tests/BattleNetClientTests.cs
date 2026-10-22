@@ -30,9 +30,7 @@ namespace dev_bot_tests.Tests
             var handler = new FakeHandler(request => request.RequestUri!.Host == "oauth.battle.net"
                 ? Json("""{"access_token":"t"}""")
                 : respond(request));
-            var factory = new Mock<IHttpClientFactory>();
-            factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(handler, disposeHandler: false));
-            return (new BattleNetClient(factory.Object), handler);
+            return (new BattleNetClient(SharedHttp.Create(new HttpClient(handler))), handler);
         }
 
         [Fact]

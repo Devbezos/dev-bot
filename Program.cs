@@ -42,7 +42,7 @@ var host = Host.CreateDefaultBuilder(args)
         var connStr = AppSettings.MySql.ConnectionString;
         services.AddApiRepositories(connStr);
         services.AddDevClientClients();
-        services.AddRemoteTaskAgent(context.Configuration);
+        services.AddRemoteTasks();
 
         services.AddSingleton(new DiscordSocketClient(new DiscordSocketConfig
         {
