@@ -6,7 +6,7 @@ DM commands use the existing Commands page, allowed Discord users, cooldown and 
 
 Nothing connects to the home network. The agent holds an outbound HTTPS long-poll to the API (through the dashboard, which proxies `/api`). When an allowed user sends the keyword, the bot:
 
-1. starts a run (rechecking allowed users and the cooldown, which is at least 5 minutes for remote tasks, failed attempts included),
+1. starts a run (rechecking allowed users and the cooldown, failed attempts included),
 2. picks the agent: the only one that isn't revoked, or else the online one that listed the alias in its hello. If none does, the reply says so and nothing is queued,
 3. queues the alias in `game_agent_commands` (linked to the run by `run_id`). The agent claims it within a few seconds, runs the matching argv from its own config, and reports `{ ok, output, exitCode }`,
 4. waits up to 90 seconds and edits its reply to done, failed, or "the agent didn't respond". A command nobody claims expires after 60 seconds.
@@ -24,7 +24,7 @@ Setup:
    - Task alias: `valheim` (must match an action name in the agent's config)
    - Who can run it: keep the existing allowed users
    - Enabled: on
-   - Cooldown: at least 5 minutes
+   - Cooldown: whatever you like (0 for none)
 
 Only the whole normalized keyword matches. The alias is set by an administrator, never taken from the Discord message, and supports 1-64 letters, numbers, spaces, underscores or hyphens. Paths and arguments are rejected, and the agent refuses names it doesn't have. The bot needs no extra configuration: it reaches the queue through the shared database. The old `remoteTaskAgent:baseUrl` / `apiKey` settings are no longer read and can be removed.
 

@@ -124,11 +124,10 @@ public class BotCommandRunStarterTests
     }
 
     [Fact]
-    public async Task ConcurrentRequestsOnlyStartOnceAndFiveMinuteMinimumStillApplies()
+    public async Task ConcurrentRequestsOnlyStartOnceWithinTheCooldown()
     {
         var now = DateTime.UtcNow;
         var command = Command();
-        command.CooldownMinutes = 0; // Even a legacy/manually edited record cannot bypass the remote minimum.
         var repo = new Mock<IBotCommandRepository>();
         repo.Setup(r => r.Get(7)).Returns(command);
         repo.Setup(r => r.StartRun(command, 123UL, It.IsAny<DateTime>()))
