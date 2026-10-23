@@ -1,27 +1,21 @@
-using DevClient.Clients;
 using DevClient.Data;
 using Discord;
 using Discord.WebSocket;
 
 public partial class BotService
 {
-    private sealed record RxpGuidesFetchResult(
-        RxpGuidesArchive? Archive,
-        RxpGuidesPost? Post,
-        string? F2hUrl,
-        string? Warning,
-        string? Error);
+    /// <summary>What a check came back with: the archive to post, "unchanged", or why it couldn't be checked.</summary>
+    public sealed record RxpGuidesFetchResult(RxpGuidesArchive? Archive, bool Unchanged, string? Error);
 
-    // Serialises replacing the stored archive against reading it (posts and /rxp DMs), since
-    // Windows won't let one replace a file another has open.
-    private static readonly SemaphoreSlim RxpGuidesArchiveLock = new(1, 1);
+    /// <summary>The action name the home agent offers for the rxp-fetch script.</summary>
+    internal const string RxpGuidesAgentAlias = "rxp";
 
-    // Latest archive kept on disk so /rxp can send it without redownloading. Holds exactly one file.
-    private static string RxpGuidesStoreDirectory => Path.Combine(AppContext.BaseDirectory, "data", "rxpguides");
+    // Forum load, f2h countdown, download and upload to the API all happen on the home PC.
+    internal static readonly TimeSpan RxpGuidesAgentWait = TimeSpan.FromMinutes(6);
 
-    // Every 3 hours by default (the rxp_guides_watch job): read the first post of the RXPGuides OwnedCore thread, follow its f2h.io link,
-    // download and hash the archive, keep it as the stored copy, and when the hash changes post
-    // it to the configured channel, pin that post and unpin the previous one. Settings and
+    // Every 3 hours by default (the rxp_guides_watch job): the home agent runs the rxp-fetch script (the forum and f2h.io block
+    // the cloud IP), which uploads a changed archive to the API. When it differs from the last posted hash, post
+    // it to every guild's RXP channel, pin that post and unpin the previous one. Settings and
     // last-seen state live in the rxp_guides_watch table (edited from the Schedule page).
     private async Task RunRxpGuidesWatch(CancellationToken cancellationToken)
     {
@@ -35,25 +29,22 @@ public partial class BotService
             return;
         }
 
+        var fetched = await FetchRxpGuidesArchive(_remoteTaskQueue, _rxpGuidesArchiveRepository, watch, cancellationToken);
+        if (fetched.Archive == null)
+        {
+            if (fetched.Unchanged) LogInfo("RXPGuides archive unchanged");
+            else LogWarn($"RXPGuides check failed: {fetched.Error}");
+            _rxpGuidesWatchRepository.RecordChecked(checkedAt, fetched.Error);
+            return;
+        }
+
+        var archive = fetched.Archive;
         var workDir = Path.Combine(Path.GetTempPath(), $"rxpguides-{Guid.NewGuid():N}");
         try
         {
-            var fetched = await FetchRxpGuidesArchive(watch, workDir, cancellationToken);
-            if (fetched.Archive == null)
-            {
-                _rxpGuidesWatchRepository.RecordChecked(checkedAt, fetched.Error);
-                return;
-            }
-
-            var archive = await StoreRxpGuidesArchive(fetched.Archive, RxpGuidesStoreDirectory);
-            var warning = fetched.Warning;
-
-            if (string.Equals(archive.Sha256, watch.Sha256, StringComparison.OrdinalIgnoreCase))
-            {
-                LogInfo("RXPGuides archive unchanged");
-                _rxpGuidesWatchRepository.RecordChecked(checkedAt, warning);
-                return;
-            }
+            Directory.CreateDirectory(workDir);
+            var filePath = Path.Combine(workDir, Path.GetFileName(archive.FileName));
+            await File.WriteAllBytesAsync(filePath, archive.Content, cancellationToken);
 
             // Each guild's channel gets its own post and pin. Problems in one channel don't stop the others.
             var message = BuildRxpGuidesUpdateMessage(watch.Sha256 == null, archive);
@@ -68,20 +59,15 @@ public partial class BotService
                     continue;
                 }
 
-                await RxpGuidesArchiveLock.WaitAsync(cancellationToken);
                 try
                 {
-                    posted.Add((channelId, await _discordClient.PostFileToChannel(channelId, message, archive.FilePath)));
+                    posted.Add((channelId, await _discordClient.PostFileToChannel(channelId, message, filePath)));
                     LogInfo($"Posted RXPGuides update ({archive.FileName}) to channel {channelId}");
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     LogError($"RXPGuides update post failed for channel {channelId}: {ex.Message}");
                     problems.Add($"{RxpChannelName(channelId)}: Discord post failed: {ex.Message}");
-                }
-                finally
-                {
-                    RxpGuidesArchiveLock.Release();
                 }
             }
 
@@ -93,7 +79,7 @@ public partial class BotService
                 return;
             }
 
-            _rxpGuidesWatchRepository.RecordChanged(fetched.F2hUrl!, archive.FileName, archive.Sha256, archive.SizeBytes, fetched.Post?.Text, checkedAt);
+            _rxpGuidesWatchRepository.RecordChanged(archive.F2hUrl ?? watch.F2hUrl ?? string.Empty, archive.FileName, archive.Sha256, archive.SizeBytes, archive.PostText, checkedAt);
 
             foreach (var (channelId, messageId) in posted.Where(p => p.MessageId != 0))
             {
@@ -103,9 +89,8 @@ public partial class BotService
             }
             await CleanUpTrackedRxpGuidesPost(watch, posted);
 
-            var combinedWarning = string.Join("; ", new[] { warning }.Concat(problems).Where(w => w != null));
-            if (combinedWarning.Length > 0)
-                _rxpGuidesWatchRepository.RecordChecked(checkedAt, combinedWarning);
+            if (problems.Count > 0)
+                _rxpGuidesWatchRepository.RecordChecked(checkedAt, string.Join("; ", problems));
         }
         finally
         {
@@ -113,80 +98,45 @@ public partial class BotService
         }
     }
 
-    // Reads the forum post (falling back to the last known f2h link) and downloads the archive
-    // into workDir. Never throws except on cancellation; failures come back in Error.
-    private async Task<RxpGuidesFetchResult> FetchRxpGuidesArchive(RxpGuidesWatch watch, string workDir, CancellationToken cancellationToken)
+    /// <summary>
+    /// Has the home agent run the rxp-fetch script, then reads the archive it stored and compares it with the last posted
+    /// hash. Never throws except on cancellation; failures come back in Error with text that is safe to show in the UI.
+    /// </summary>
+    public static async Task<RxpGuidesFetchResult> FetchRxpGuidesArchive(
+        RemoteTaskQueue queue, IRxpGuidesArchiveRepository archives, RxpGuidesWatch watch, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(watch.ThreadUrl))
-        {
-            LogWarn("RXPGuides thread URL is not configured");
-            return new RxpGuidesFetchResult(null, null, null, null, "Thread URL is not configured");
-        }
+            return new(null, false, "Thread URL is not configured");
 
-        var client = new RxpGuidesClient();
-        RxpGuidesPost? post = null;
-        string f2hUrl;
-        string? warning = null;
+        RemoteTaskResult run;
         try
         {
-            post = await client.GetFirstPost(watch.ThreadUrl, cancellationToken);
-            f2hUrl = post.F2hUrl ?? throw new InvalidOperationException("No f2h.io link in the first post");
-            LogInfo($"RXPGuides first post links to {f2hUrl}");
+            run = await queue.RunAsync(RxpGuidesAgentAlias, 0, null, cancellationToken, RxpGuidesAgentWait);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Cloudflare or a forum layout change; the last known file link is still worth checking.
-            if (string.IsNullOrEmpty(watch.F2hUrl))
-            {
-                LogError($"RXPGuides could not read the forum post: {ex.Message}");
-                return new RxpGuidesFetchResult(null, null, null, null, $"Could not read the forum post: {ex.Message}");
-            }
-
-            f2hUrl = watch.F2hUrl;
-            warning = $"Could not read the forum post ({ex.Message}); re-checked the last known link";
-            LogWarn($"RXPGuides: {warning}");
+            // Exception messages can include connection details; keep only the type.
+            return new(null, false, $"Could not ask the home agent to check RXPGuides ({ex.GetType().Name}).");
         }
+        if (!run.Succeeded)
+            return new(null, false, $"RXPGuides check on the home agent failed: {run.Message}");
 
+        RxpGuidesArchive? archive;
         try
         {
-            var archive = await client.DownloadArchive(f2hUrl, workDir, cancellationToken);
-            LogInfo($"RXPGuides archive {archive.FileName} ({archive.SizeBytes} bytes) sha256={archive.Sha256}");
-            return new RxpGuidesFetchResult(archive, post, f2hUrl, warning, null);
+            archive = archives.Get();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            LogError($"RXPGuides could not download {f2hUrl}: {ex.Message}");
-            return new RxpGuidesFetchResult(null, post, f2hUrl, warning, $"Could not download {f2hUrl}: {ex.Message}");
+            return new(null, false, $"Could not read the stored RXPGuides archive ({ex.GetType().Name}).");
         }
+        if (archive == null)
+            return new(null, false, "The home agent finished but no RXPGuides archive has been stored yet.");
+
+        return string.Equals(archive.Sha256, watch.Sha256, StringComparison.OrdinalIgnoreCase)
+            ? new(null, true, null)
+            : new(archive, false, null);
     }
-
-    // Makes `archive` the only file in storeDirectory and returns it pointing at the stored copy.
-    private static async Task<RxpGuidesArchive> StoreRxpGuidesArchive(RxpGuidesArchive archive, string storeDirectory)
-    {
-        await RxpGuidesArchiveLock.WaitAsync();
-        try
-        {
-            Directory.CreateDirectory(storeDirectory);
-            var destination = Path.Combine(storeDirectory, archive.FileName);
-            if (!string.Equals(Path.GetFullPath(archive.FilePath), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
-                File.Copy(archive.FilePath, destination, overwrite: true);
-
-            foreach (var file in Directory.GetFiles(storeDirectory))
-                if (!string.Equals(Path.GetFileName(file), archive.FileName, StringComparison.OrdinalIgnoreCase))
-                    File.Delete(file);
-
-            return archive with { FilePath = destination };
-        }
-        finally
-        {
-            RxpGuidesArchiveLock.Release();
-        }
-    }
-
-    private static string? GetStoredRxpGuidesArchivePath(string storeDirectory) =>
-        Directory.Exists(storeDirectory)
-            ? Directory.GetFiles(storeDirectory).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
-            : null;
 
     /// <summary>The key a guild's RXPGuides channel is saved under (Guilds → a guild → RXP Guides).</summary>
     internal const string RxpGuidesChannelKey = "rxpGuides";

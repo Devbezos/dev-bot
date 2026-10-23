@@ -12,11 +12,10 @@ public partial class BotService
             .WithName(RxpCommandName)
             .WithDescription("DM you the latest RXPGuides file.");
 
-    // Sends the stored archive by DM. Only downloads when nothing is stored yet (e.g. right after
-    // a fresh deploy, before the daily watch has run). All replies are ephemeral.
+    // Sends the archive the home agent last stored in the database by DM. All replies are ephemeral.
     private async Task HandleRxpCommand(CommandInvocation command)
     {
-        // Fetching can take a minute; deferring keeps the interaction alive past Discord's 3s
+        // Reading and uploading the file can take a while; deferring keeps the interaction alive past Discord's 3s
         // window, and running the rest off the gateway task keeps the bot responsive meanwhile.
         await command.DeferAsync(ephemeral: true);
 
@@ -39,36 +38,22 @@ public partial class BotService
     {
         await RunLoggedAsync(async () =>
         {
-            var path = GetStoredRxpGuidesArchivePath(RxpGuidesStoreDirectory);
-            if (path == null)
+            var archive = _rxpGuidesArchiveRepository.Get();
+            if (archive == null)
             {
-                LogInfo("/rxp: no stored RXPGuides archive; fetching it now");
-                var workDir = Path.Combine(Path.GetTempPath(), $"rxpguides-{Guid.NewGuid():N}");
-                try
-                {
-                    var fetched = await FetchRxpGuidesArchive(_rxpGuidesWatchRepository.Get(), workDir, CancellationToken.None);
-                    if (fetched.Archive == null)
-                    {
-                        await command.ReplyAsync($"Couldn't get the latest RXPGuides file: {fetched.Error}", ephemeral: true);
-                        return;
-                    }
-
-                    path = (await StoreRxpGuidesArchive(fetched.Archive, RxpGuidesStoreDirectory)).FilePath;
-                }
-                finally
-                {
-                    TryDeleteDirectory(workDir);
-                }
+                LogInfo("/rxp: no stored RXPGuides archive yet");
+                await command.ReplyAsync("I don't have the RXPGuides file yet. The home agent delivers it on the next check, so try again later.", ephemeral: true);
+                return;
             }
 
-            var fileName = Path.GetFileName(path);
-            var size = FormatMegabytes(new FileInfo(path).Length);
+            var fileName = Path.GetFileName(archive.FileName);
+            var size = FormatMegabytes(archive.SizeBytes);
 
-            await RxpGuidesArchiveLock.WaitAsync();
             try
             {
                 var dm = await command.User.CreateDMChannelAsync();
-                await dm.SendFileAsync(path, $"**Latest RXPGuides:** `{fileName}` ({size})");
+                using var stream = new MemoryStream(archive.Content, writable: false);
+                await dm.SendFileAsync(stream, fileName, $"**Latest RXPGuides:** `{fileName}` ({size})");
                 LogInfo($"/rxp: sent {fileName} to user {command.User.Id}");
             }
             catch (HttpException ex) when (ex.DiscordCode == DiscordErrorCode.CannotSendMessageToUser)
@@ -81,10 +66,6 @@ public partial class BotService
                 LogWarn($"/rxp: {fileName} ({size}) is over Discord's DM upload limit");
                 await command.ReplyAsync($"`{fileName}` is {size}, which is over Discord's upload limit for DMs, so I can't send it.", ephemeral: true);
                 return;
-            }
-            finally
-            {
-                RxpGuidesArchiveLock.Release();
             }
 
             // Asked in a DM, the file itself is the reply.

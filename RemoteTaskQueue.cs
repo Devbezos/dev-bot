@@ -15,7 +15,9 @@ public sealed class RemoteTaskQueue(IGameAgentRepository agents, TimeSpan? wait 
     private readonly TimeSpan _wait = wait ?? DefaultWait;
     private readonly TimeSpan _poll = pollInterval ?? TimeSpan.FromSeconds(2);
 
-    public async Task<RemoteTaskResult> RunAsync(string alias, ulong requestedBy, int runId, CancellationToken cancellationToken = default)
+    /// <param name="runId">The command run this belongs to, or null for a scheduler-triggered task (requestedBy is then 0).</param>
+    /// <param name="wait">How long to wait for the result; <see cref="DefaultWait"/> when null.</param>
+    public async Task<RemoteTaskResult> RunAsync(string alias, ulong requestedBy, int? runId, CancellationToken cancellationToken = default, TimeSpan? wait = null)
     {
         if (!BotCommandRules.IsRemoteTaskAlias(alias))
             return new(false, null, "The remote task alias is invalid. Ask an administrator to check this command.");
@@ -26,7 +28,7 @@ public sealed class RemoteTaskQueue(IGameAgentRepository agents, TimeSpan? wait 
             return new(false, null, error!);
 
         var id = agents.Queue(agent.Id, alias, requestedBy.ToString(), runId, now);
-        var deadline = now + _wait;
+        var deadline = now + (wait ?? _wait);
         while (true)
         {
             await Task.Delay(_poll, cancellationToken);
