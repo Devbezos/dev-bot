@@ -410,3 +410,7 @@ FodyWeavers.xsd
 # Local build and scratch output
 [Bb]uild/
 tmp-*.log
+
+# Home-PC scrape tool: per-machine settings and publish output
+tools/dev-scrape/config.json
+tools/dev-scrape/publish/

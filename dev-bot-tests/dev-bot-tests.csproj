@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DevBot.csproj" />
+    <ProjectReference Include="..\tools\dev-scrape\DevScrape.csproj" />
   </ItemGroup>
 
 </Project>

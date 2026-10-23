@@ -12,6 +12,11 @@
     <Content Remove="dev-bot-tests\**" />
     <EmbeddedResource Remove="dev-bot-tests\**" />
     <None Remove="dev-bot-tests\**" />
+    <!-- tools\dev-scrape is the home PC's scrape tool, its own project; never part of the bot image. -->
+    <Compile Remove="tools\**" />
+    <Content Remove="tools\**" />
+    <EmbeddedResource Remove="tools\**" />
+    <None Remove="tools\**" />
     <None Remove="libopus.dll" />
     <None Remove="libsodium.dll" />
     <Reference Remove="libopus" />

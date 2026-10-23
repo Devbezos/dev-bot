@@ -42,6 +42,7 @@ public partial class BotService : BackgroundService
     private readonly IPokemonCenterSecurityStateRepository _pokemonCenterSecurityStateRepository;
     private readonly IRxpGuidesWatchRepository _rxpGuidesWatchRepository;
     private readonly IRxpGuidesArchiveRepository _rxpGuidesArchiveRepository;
+    private readonly ITcgScrapeResultRepository _tcgScrapeResultRepository;
     private readonly IReminderRepository _reminderRepository;
     private readonly IGoalRepository _goalRepository;
     private readonly IProgressRepository _progressRepository;
@@ -91,6 +92,8 @@ public partial class BotService : BackgroundService
         IPokemonCenterSecurityStateRepository pokemonCenterSecurityStateRepository,
         IRxpGuidesWatchRepository rxpGuidesWatchRepository,
         IRxpGuidesArchiveRepository rxpGuidesArchiveRepository,
+        ITcgScrapeResultRepository tcgScrapeResultRepository,
+        ITcgBotStateRepository tcgBotStateRepository,
         IReminderRepository reminderRepository,
         IGoalRepository goalRepository,
         IProgressRepository progressRepository,
@@ -132,6 +135,8 @@ public partial class BotService : BackgroundService
         _pokemonCenterSecurityStateRepository = pokemonCenterSecurityStateRepository;
         _rxpGuidesWatchRepository = rxpGuidesWatchRepository;
         _rxpGuidesArchiveRepository = rxpGuidesArchiveRepository;
+        _tcgScrapeResultRepository = tcgScrapeResultRepository;
+        UseTcgBotState(tcgBotStateRepository);
         _reminderRepository = reminderRepository;
         _goalRepository = goalRepository;
         _progressRepository = progressRepository;

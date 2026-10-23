@@ -21,6 +21,34 @@ public partial class BotService
     private static readonly object TcgChannelAlertStateLock = new();
     private static string TcgChannelAlertStatePath => Path.Combine(AppContext.BaseDirectory, "data", "tcg-channel-alert-state.json");
 
+    private const string TcgNotifiedProductsKey = "notified-products";
+    private const string TcgChannelPostKey = "channel-post-state";
+    private const string TcgChannelAlertKey = "channel-alert-state";
+
+    // The TCG state (seen products, last posted sets, alert message ids) lives in tcg_bot_state so it survives deploys.
+    // Set from the constructor; the helpers are static because the off-tick TCG jobs and the tests use them that way.
+    private static ITcgBotStateRepository? _tcgBotState;
+
+    public static void UseTcgBotState(ITcgBotStateRepository store) => _tcgBotState = store;
+
+    // A missing row reads like a missing file did. On a dev machine that still has the old file, its content is imported once;
+    // the file itself is left alone.
+    private static string? ReadTcgState(string key, string legacyFilePath)
+    {
+        var store = _tcgBotState ?? throw new InvalidOperationException("The TCG state store isn't set up.");
+        var json = store.Get(key);
+        if (json == null && File.Exists(legacyFilePath))
+        {
+            json = File.ReadAllText(legacyFilePath);
+            if (!string.IsNullOrWhiteSpace(json))
+                store.Set(key, json);
+        }
+        return json;
+    }
+
+    private static void WriteTcgState(string key, string json) =>
+        (_tcgBotState ?? throw new InvalidOperationException("The TCG state store isn't set up.")).Set(key, json);
+
     private static bool IsExpensiveStore(string store) =>
         store.Contains("Expensive", StringComparison.OrdinalIgnoreCase);
 
@@ -104,6 +132,23 @@ public partial class BotService
             : $"{normalizedStore}||{normalizedUrl}||{normalizedName}";
     }
 
+    /// <summary>
+    /// A store whose scraper failed on the home PC isn't sold out, it just wasn't read: its products from the previous saved
+    /// run are added back (unless this scrape did return that store) so they neither disappear from the channel nor look new later.
+    /// </summary>
+    public static List<Search> KeepFailedStoreProducts(List<Search> latest, List<TcgResult> previous, IEnumerable<string>? failedStores)
+    {
+        var failed = (failedStores ?? []).Select(NormalizeStore).Where(s => s.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (failed.Count == 0) return latest;
+        failed.ExceptWith(latest.Select(s => NormalizeStore(s.Store)));
+
+        var kept = previous
+            .Where(p => failed.Contains(NormalizeStore(p.Store)))
+            .GroupBy(p => (p.Store, p.Keyword))
+            .Select(g => new Search(g.Key.Keyword, g.Key.Store, g.Select(p => new Product(p.ProductName, p.Price, ExtractRawUrl(p.Url))).ToList()));
+        return latest.Concat(kept).ToList();
+    }
+
     private static List<(string Store, Product Product)> GetNewProducts(List<Search> latest, List<TcgResult> previous)
     {
         var previousKeys = previous
@@ -151,10 +196,7 @@ public partial class BotService
 
     private static Dictionary<string, HashSet<string>> LoadTcgNotificationState()
     {
-        if (!File.Exists(TcgNotificationStatePath))
-            return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
-        var json = File.ReadAllText(TcgNotificationStatePath);
+        var json = ReadTcgState(TcgNotifiedProductsKey, TcgNotificationStatePath);
         if (string.IsNullOrWhiteSpace(json))
             return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -169,16 +211,12 @@ public partial class BotService
 
     private static void SaveTcgNotificationState(Dictionary<string, HashSet<string>> state)
     {
-        var directory = Path.GetDirectoryName(TcgNotificationStatePath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
         var raw = state.ToDictionary(
             x => x.Key,
             x => x.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToArray(),
             StringComparer.OrdinalIgnoreCase);
 
-        File.WriteAllText(TcgNotificationStatePath, JsonConvert.SerializeObject(raw, TcgNotificationJsonOptions));
+        WriteTcgState(TcgNotifiedProductsKey, JsonConvert.SerializeObject(raw, TcgNotificationJsonOptions));
     }
 
     private static bool ProductSetChangedForChannel(string settingsKey, ulong channelId, List<Search> latest)
@@ -220,10 +258,7 @@ public partial class BotService
 
     private static Dictionary<string, HashSet<string>> LoadTcgChannelPostState()
     {
-        if (!File.Exists(TcgChannelPostStatePath))
-            return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
-        var json = File.ReadAllText(TcgChannelPostStatePath);
+        var json = ReadTcgState(TcgChannelPostKey, TcgChannelPostStatePath);
         if (string.IsNullOrWhiteSpace(json))
             return new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -238,16 +273,12 @@ public partial class BotService
 
     private static void SaveTcgChannelPostState(Dictionary<string, HashSet<string>> state)
     {
-        var directory = Path.GetDirectoryName(TcgChannelPostStatePath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
         var raw = state.ToDictionary(
             x => x.Key,
             x => x.Value.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToArray(),
             StringComparer.OrdinalIgnoreCase);
 
-        File.WriteAllText(TcgChannelPostStatePath, JsonConvert.SerializeObject(raw, TcgNotificationJsonOptions));
+        WriteTcgState(TcgChannelPostKey, JsonConvert.SerializeObject(raw, TcgNotificationJsonOptions));
     }
 
     private static ulong? GetLatestChannelAlertMessageId(string settingsKey, ulong channelId)
@@ -273,10 +304,7 @@ public partial class BotService
 
     private static Dictionary<string, ulong> LoadTcgChannelAlertState()
     {
-        if (!File.Exists(TcgChannelAlertStatePath))
-            return new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
-
-        var json = File.ReadAllText(TcgChannelAlertStatePath);
+        var json = ReadTcgState(TcgChannelAlertKey, TcgChannelAlertStatePath);
         if (string.IsNullOrWhiteSpace(json))
             return new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
 
@@ -286,15 +314,11 @@ public partial class BotService
 
     private static void SaveTcgChannelAlertState(Dictionary<string, ulong> state)
     {
-        var directory = Path.GetDirectoryName(TcgChannelAlertStatePath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
         var ordered = state
             .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
 
-        File.WriteAllText(TcgChannelAlertStatePath, JsonConvert.SerializeObject(ordered, TcgNotificationJsonOptions));
+        WriteTcgState(TcgChannelAlertKey, JsonConvert.SerializeObject(ordered, TcgNotificationJsonOptions));
     }
 
     private async Task NotifyNewProducts(string label, string settingsKey, List<(string Store, Product Product)> newProducts)
@@ -542,77 +566,99 @@ public partial class BotService
         }
     }
 
-    private async Task RunPokemonPreorderJob()
+    private async Task ProcessPokemonScrape(TcgScrapePayload payload)
     {
-        var preorderResults = new List<Search>();
-        var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
+        var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
+        var tcgResults = KeepFailedStoreProducts(payload.ToSearches(), previousPokemonResults, payload.FailedStores);
 
-        try
+        var filtered = PokemonPriceFilter.Apply(tcgResults);
+        var splitPokemonResults = TcgPreorderClassifier.Split(filtered);
+        var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
+        var divertedPreorders = ApplyDiscordFilters("preorder", splitPokemonResults.Preorders);
+        var newPokemonProducts = GetFirstSaleProducts("pokemon", discordFiltered, previousPokemonResults);
+        var pokemonChannelIds = GetConfiguredChannelIds("pokemon");
+        var pokemonChannelsToPost = pokemonChannelIds
+            .Where(channelId => ProductSetChangedForChannel("pokemon", channelId, discordFiltered))
+            .ToArray();
+        LogInfo($"Pokemon TCG: {filtered.Sum(r => r.Products.Count)} product(s) after price filter, {discordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newPokemonProducts.Count} newly seen, channels: {DescribeChannelTargets(pokemonChannelIds)}, changed channels: {DescribeChannelTargets(pokemonChannelsToPost)}");
+        if (pokemonChannelsToPost.Length > 0 && discordFiltered.Any())
+            await PostTcgResultsToChannels("Pokemon TCG", pokemonChannelsToPost, _ => discordFiltered, (channelId, results) => SaveChannelProductSet("pokemon", channelId, results));
+        else if (pokemonChannelIds.Length > 0 && discordFiltered.Any())
+            LogInfo("Pokemon TCG Discord post skipped; products unchanged for all configured channels");
+        else if (pokemonChannelIds.Length > 0)
+            LogInfo("Pokemon TCG post skipped; all products were filtered or diverted");
+        else
+            LogWarn("Pokemon TCG channel is not configured; skipping Discord post");
+        if (filtered.Any())
         {
-            LogInfo("Pokemon pre-order scrape starting: 401Games");
-            var results = await preorderClient.GetPokemonPreOrders();
-            var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-            preorderResults.AddRange(nonEmpty);
-            LogInfo($"Pokemon pre-order scrape finished: 401Games - {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
+            if (newPokemonProducts.Any())
+                await PostLatestNewProductMessages("Pokemon TCG", "pokemon", pokemonChannelIds, newPokemonProducts);
+            if (newPokemonProducts.Any())
+                await NotifyNewProducts("Pokemon TCG", "pokemon", newPokemonProducts);
+            _tcgRepository.SaveResults(DateTime.UtcNow, splitPokemonResults.Regular, "pokemon");
+            LogInfo($"Pokemon TCG: saved {splitPokemonResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
+            await SaveDivertedPreorderResults("Pokemon Pre-Order TCG", "pokemon_preorder", "pokemon_preorder", divertedPreorders);
         }
-        catch (Exception ex)
-        {
-            LogError($"Pokemon pre-order scrape failed: 401Games: {ex.Message}");
-        }
+    }
 
-        try
-        {
-            var hobbiesvilleClient = new HobbiesvilleClient(_tcgSourceUrlRepository);
-            LogInfo("Pokemon pre-order scrape starting: Hobbiesville");
-            var results = await hobbiesvilleClient.GetPokemonPreOrders();
-            var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-            preorderResults.AddRange(nonEmpty);
-            LogInfo($"Pokemon pre-order scrape finished: Hobbiesville - {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-        }
-        catch (Exception ex)
-        {
-            LogError($"Pokemon pre-order scrape failed: Hobbiesville: {ex.Message}");
-        }
+    private async Task ProcessGundamScrape(TcgScrapePayload payload)
+    {
+        var previousGundamResults = _tcgRepository.GetLatestRun("gundam");
+        var filteredGundamResults = KeepFailedStoreProducts(payload.ToSearches(), previousGundamResults, payload.FailedStores);
 
-        await PostPreorderResults(
+        var splitGundamResults = TcgPreorderClassifier.Split(filteredGundamResults);
+        var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
+        var divertedGundamPreorders = ApplyDiscordFilters("preorder", splitGundamResults.Preorders);
+        var newGundamProducts = GetFirstSaleProducts("gundam", gundamDiscordFiltered, previousGundamResults);
+        var gundamChannelIds = GetConfiguredChannelIds("gundam");
+        var gundamChannelsToPost = gundamChannelIds
+            .Where(channelId => ProductSetChangedForChannel("gundam", channelId, gundamDiscordFiltered))
+            .ToArray();
+        LogInfo($"Gundam TCG: {filteredGundamResults.Sum(r => r.Products.Count)} scraped product(s), {gundamDiscordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedGundamPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newGundamProducts.Count} newly seen, channels: {DescribeChannelTargets(gundamChannelIds)}, changed channels: {DescribeChannelTargets(gundamChannelsToPost)}");
+        if (gundamChannelsToPost.Length > 0 && gundamDiscordFiltered.Any())
+            await PostTcgResultsToChannels("Gundam TCG", gundamChannelsToPost, _ => gundamDiscordFiltered, (channelId, results) => SaveChannelProductSet("gundam", channelId, results));
+        else if (gundamChannelIds.Length > 0 && gundamDiscordFiltered.Any())
+            LogInfo("Gundam TCG Discord post skipped; products unchanged for all configured channels");
+        else if (gundamChannelIds.Length > 0)
+            LogInfo("Gundam TCG post skipped; all products were filtered or diverted");
+        else
+            LogWarn("Gundam TCG channel is not configured; skipping Discord post");
+        if (filteredGundamResults.Any())
+        {
+            if (newGundamProducts.Any())
+                await PostLatestNewProductMessages("Gundam TCG", "gundam", gundamChannelIds, newGundamProducts);
+            if (newGundamProducts.Any())
+                await NotifyNewProducts("Gundam TCG", "gundam", newGundamProducts);
+            _tcgRepository.SaveResults(DateTime.UtcNow, splitGundamResults.Regular, "gundam");
+            LogInfo($"Gundam TCG: saved {splitGundamResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
+            await SaveDivertedPreorderResults("Gundam Pre-Order TCG", "gundam_preorder", "gundam_preorder", divertedGundamPreorders);
+        }
+    }
+
+    private Task ProcessPokemonPreorderScrape(TcgScrapePayload payload) =>
+        PostPreorderResults(
             label: "Pokemon Pre-Order TCG",
             resultsKey: "pokemon_preorder",
             settingsKey: "pokemon_preorder",
             filterGame: "pokemon",
-            preorderResults);
-    }
+            payload.ToSearches(),
+            payload.FailedStores);
 
-    private async Task RunGundamPreorderJob()
-    {
-        var preorderResults = new List<Search>();
-        var preorderClient = new _401GamesClient(_tcgSourceUrlRepository);
-
-        try
-        {
-            LogInfo("Gundam pre-order scrape starting: 401Games");
-            var results = await preorderClient.GetGundamPreOrders();
-            var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-            preorderResults.AddRange(nonEmpty);
-            LogInfo($"Gundam pre-order scrape finished: 401Games - {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-        }
-        catch (Exception ex)
-        {
-            LogError($"Gundam pre-order scrape failed: 401Games: {ex.Message}");
-        }
-
-        await PostPreorderResults(
+    private Task ProcessGundamPreorderScrape(TcgScrapePayload payload) =>
+        PostPreorderResults(
             label: "Gundam Pre-Order TCG",
             resultsKey: "gundam_preorder",
             settingsKey: "gundam_preorder",
             filterGame: "gundam",
-            preorderResults);
-    }
+            payload.ToSearches(),
+            payload.FailedStores);
 
-    private async Task PostPreorderResults(string label, string resultsKey, string settingsKey, string filterGame, List<Search> preorderResults)
+    private async Task PostPreorderResults(string label, string resultsKey, string settingsKey, string filterGame, List<Search> preorderResults, IEnumerable<string>? failedStores = null)
     {
         var previousPreorderResults = _tcgRepository.GetLatestRun(resultsKey);
         if (previousPreorderResults.Count == 0)
             previousPreorderResults = _tcgRepository.GetLatestRun("preorder");
+        preorderResults = KeepFailedStoreProducts(preorderResults, previousPreorderResults, failedStores);
         var preorderDiscordFiltered = ApplyDiscordFilters(ResolvePreorderFilterGame(filterGame), preorderResults);
         var newPreorderProducts = GetFirstSaleProducts(settingsKey, preorderDiscordFiltered, previousPreorderResults);
         var preorderChannelIds = GetConfiguredChannelIds(settingsKey, fallbackToSharedPreorder: true);
@@ -657,22 +703,19 @@ public partial class BotService
         LogInfo($"{label}: diverted {preorderResults.Sum(r => r.Products.Count)} pre-order-like product(s) from normal TCG results");
     }
 
-    private async Task RunPokemonCenterSecurityCheck(CancellationToken cancellationToken)
+    // The home PC captured the snapshot (tcg-pokecenter-security); the comparison with the stored state and the notifications stay here.
+    private async Task ProcessPokemonCenterSecuritySnapshot(TcgScrapePayload payload)
     {
         const string stateKey = "pokemon_center_ca";
         const string settingsKey = "pokemon_center_security";
 
-        PokemonCenterSecuritySnapshot snapshot;
-        try
+        if (payload.Snapshot == null)
         {
-            snapshot = await new PokemonCenterSecurityClient().GetSnapshot(cancellationToken);
-            LogInfo($"Pokemon Center security snapshot captured: {snapshot.Summary.Replace("\n", " | ")}");
-        }
-        catch (Exception ex)
-        {
-            LogError($"Pokemon Center security check failed: {ex.Message}");
+            LogError("Pokemon Center security check failed: the home agent's upload has no snapshot");
             return;
         }
+        var snapshot = payload.Snapshot.ToSnapshot();
+        LogInfo($"Pokemon Center security snapshot captured: {snapshot.Summary.Replace("\n", " | ")}");
 
         var previous = _pokemonCenterSecurityStateRepository.Get(stateKey);
         var nextState = new PokemonCenterSecurityState(
@@ -895,13 +938,6 @@ public partial class BotService
                 }
             }
 
-            var pokemonCenterSecurityJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonCenterSecurity);
-            if (pokemonCenterSecurityJob != null && _jobRepository.ShouldRun(pokemonCenterSecurityJob, now))
-            {
-                await RunPokemonCenterSecurityCheck(cancellationToken);
-                _jobRepository.MarkRan(Constants.Jobs.PokemonCenterSecurity);
-            }
-
             var rxpGuidesWatchJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.RxpGuidesWatch);
             if (rxpGuidesWatchJob != null && _jobRepository.ShouldRunToday(rxpGuidesWatchJob, now, eastern))
             {
@@ -979,152 +1015,12 @@ public partial class BotService
                     _jobRepository.MarkRan(fitnessWeekly.Name);
             }
 
-            var pokemonTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonTcg);
-            if (pokemonTcgJob != null && _jobRepository.ShouldRun(pokemonTcgJob, now))
+            // The five TCG jobs scrape on the home PC through the agent, which takes minutes, so they run off the tick.
+            foreach (var (jobName, scrapeJob) in TcgTickJobs)
             {
-                var tcgResults = new List<Search>();
-                await using var browser = await PlaywrightBrowser.CreateAsync();
-                var scrapers = new (string Name, Func<Task<List<Search>>> Run)[]
-                {
-                    ("401Games", () => new _401GamesClient(_tcgSourceUrlRepository).GetPokemon()),
-                    ("Atlas", () => new AtlasClient(_tcgSourceUrlRepository).GetPokemon()),
-                    ("Chimera", () => new ChimeraClient(_tcgSourceUrlRepository).GetPokemon()),
-                    ("EBGames", () => new EBGamesClient(_tcgSourceUrlRepository, browser).GetPokemon()),
-                    ("HouseOfCards", () => new HouseOfCardsClient(_tcgSourceUrlRepository).GetPokemon()),
-                    ("JJ", () => new JJClient(_tcgSourceUrlRepository, browser).GetProducts()),
-                    ("Shopify Pokemon", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetPokemon(
-                        "DarkFoxTCG",
-                        "EnterTheBattlefield",
-                        "TopShelfCo")),
-                    ("Walmart", () => new WalmartClient(_tcgSourceUrlRepository, browser).GetPokemon()),
-                    ("Dollys", () => new DollysClient(_tcgSourceUrlRepository).GetPokemon()),
-                };
-
-                foreach (var scraper in scrapers)
-                {
-                    try
-                    {
-                        LogInfo($"TCG scrape starting: {scraper.Name}");
-                        var results = await scraper.Run();
-                        var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-                        tcgResults.AddRange(nonEmpty);
-                        LogInfo($"TCG scrape finished: {scraper.Name} â€” {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-                    }
-                    catch (Exception ex)
-                    {
-                        LogError($"TCG scrape failed: {scraper.Name}: {ex.Message}");
-                    }
-                }
-
-                var filtered = PokemonPriceFilter.Apply(tcgResults);
-                var splitPokemonResults = TcgPreorderClassifier.Split(filtered);
-                var previousPokemonResults = _tcgRepository.GetLatestRun("pokemon");
-                var discordFiltered = ApplyDiscordFilters("pokemon", splitPokemonResults.Regular);
-                var divertedPreorders = ApplyDiscordFilters("preorder", splitPokemonResults.Preorders);
-                var newPokemonProducts = GetFirstSaleProducts("pokemon", discordFiltered, previousPokemonResults);
-                var pokemonChannelIds = GetConfiguredChannelIds("pokemon");
-                var pokemonChannelsToPost = pokemonChannelIds
-                    .Where(channelId => ProductSetChangedForChannel("pokemon", channelId, discordFiltered))
-                    .ToArray();
-                LogInfo($"Pokemon TCG: {filtered.Sum(r => r.Products.Count)} product(s) after price filter, {discordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newPokemonProducts.Count} newly seen, channels: {DescribeChannelTargets(pokemonChannelIds)}, changed channels: {DescribeChannelTargets(pokemonChannelsToPost)}");
-                if (pokemonChannelsToPost.Length > 0 && discordFiltered.Any())
-                    await PostTcgResultsToChannels("Pokemon TCG", pokemonChannelsToPost, _ => discordFiltered, (channelId, results) => SaveChannelProductSet("pokemon", channelId, results));
-                else if (pokemonChannelIds.Length > 0 && discordFiltered.Any())
-                    LogInfo("Pokemon TCG Discord post skipped; products unchanged for all configured channels");
-                else if (pokemonChannelIds.Length > 0)
-                    LogInfo("Pokemon TCG post skipped; all products were filtered or diverted");
-                else
-                    LogWarn("Pokemon TCG channel is not configured; skipping Discord post");
-                if (filtered.Any())
-                {
-                    if (newPokemonProducts.Any())
-                        await PostLatestNewProductMessages("Pokemon TCG", "pokemon", pokemonChannelIds, newPokemonProducts);
-                    if (newPokemonProducts.Any())
-                        await NotifyNewProducts("Pokemon TCG", "pokemon", newPokemonProducts);
-                    _tcgRepository.SaveResults(DateTime.UtcNow, splitPokemonResults.Regular, "pokemon");
-                    LogInfo($"Pokemon TCG: saved {splitPokemonResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
-                    await SaveDivertedPreorderResults("Pokemon Pre-Order TCG", "pokemon_preorder", "pokemon_preorder", divertedPreorders);
-                }
-
-                _jobRepository.MarkRan(Constants.Jobs.PokemonTcg);
-            }
-
-            var gundamTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.GundamTcg);
-            if (gundamTcgJob != null && _jobRepository.ShouldRun(gundamTcgJob, now))
-            {
-                var gundamResults = new List<Search>();
-                var gundamScrapers = new (string Name, Func<Task<List<Search>>> Run)[]
-                {
-                    ("401Games Gundam", () => new _401GamesClient(_tcgSourceUrlRepository).GetGundam()),
-                    ("Atlas Gundam", () => new AtlasClient(_tcgSourceUrlRepository).GetGundam()),
-                    ("Dollys Gundam", () => new DollysClient(_tcgSourceUrlRepository).GetGundam()),
-                    ("Shopify Gundam", () => new ShopifyCollectionClient(_tcgSourceUrlRepository).GetGundam(
-                        "TopShelfCo",
-                        "Untouchables",
-                        "TKOToyCo")),
-                };
-
-                foreach (var scraper in gundamScrapers)
-                {
-                    try
-                    {
-                        LogInfo($"Gundam scrape starting: {scraper.Name}");
-                        var results = await scraper.Run();
-                        var nonEmpty = results.Where(r => r.Products.Any()).ToList();
-                        gundamResults.AddRange(nonEmpty);
-                        LogInfo($"Gundam scrape finished: {scraper.Name} â€” {results.Count} result set(s), {nonEmpty.Sum(r => r.Products.Count)} product(s)");
-                    }
-                    catch (Exception ex)
-                    {
-                        LogError($"Gundam scrape failed: {scraper.Name}: {ex.Message}");
-                    }
-                }
-
-                var filteredGundamResults = gundamResults;
-                var splitGundamResults = TcgPreorderClassifier.Split(filteredGundamResults);
-                var previousGundamResults = _tcgRepository.GetLatestRun("gundam");
-                var gundamDiscordFiltered = ApplyDiscordFilters("gundam", splitGundamResults.Regular);
-                var divertedGundamPreorders = ApplyDiscordFilters("preorder", splitGundamResults.Preorders);
-                var newGundamProducts = GetFirstSaleProducts("gundam", gundamDiscordFiltered, previousGundamResults);
-                var gundamChannelIds = GetConfiguredChannelIds("gundam");
-                var gundamChannelsToPost = gundamChannelIds
-                    .Where(channelId => ProductSetChangedForChannel("gundam", channelId, gundamDiscordFiltered))
-                    .ToArray();
-                LogInfo($"Gundam TCG: {filteredGundamResults.Sum(r => r.Products.Count)} scraped product(s), {gundamDiscordFiltered.Sum(r => r.Products.Count)} regular product(s) after Discord filters, {divertedGundamPreorders.Sum(r => r.Products.Count)} diverted preorder product(s), {newGundamProducts.Count} newly seen, channels: {DescribeChannelTargets(gundamChannelIds)}, changed channels: {DescribeChannelTargets(gundamChannelsToPost)}");
-                if (gundamChannelsToPost.Length > 0 && gundamDiscordFiltered.Any())
-                    await PostTcgResultsToChannels("Gundam TCG", gundamChannelsToPost, _ => gundamDiscordFiltered, (channelId, results) => SaveChannelProductSet("gundam", channelId, results));
-                else if (gundamChannelIds.Length > 0 && gundamDiscordFiltered.Any())
-                    LogInfo("Gundam TCG Discord post skipped; products unchanged for all configured channels");
-                else if (gundamChannelIds.Length > 0)
-                    LogInfo("Gundam TCG post skipped; all products were filtered or diverted");
-                else
-                    LogWarn("Gundam TCG channel is not configured; skipping Discord post");
-                if (filteredGundamResults.Any())
-                {
-                    if (newGundamProducts.Any())
-                        await PostLatestNewProductMessages("Gundam TCG", "gundam", gundamChannelIds, newGundamProducts);
-                    if (newGundamProducts.Any())
-                        await NotifyNewProducts("Gundam TCG", "gundam", newGundamProducts);
-                    _tcgRepository.SaveResults(DateTime.UtcNow, splitGundamResults.Regular, "gundam");
-                    LogInfo($"Gundam TCG: saved {splitGundamResults.Regular.Sum(r => r.Products.Count)} regular product(s)");
-                    await SaveDivertedPreorderResults("Gundam Pre-Order TCG", "gundam_preorder", "gundam_preorder", divertedGundamPreorders);
-                }
-
-                _jobRepository.MarkRan(Constants.Jobs.GundamTcg);
-            }
-
-            var pokemonPreorderTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.PokemonPreorderTcg);
-            if (pokemonPreorderTcgJob != null && _jobRepository.ShouldRun(pokemonPreorderTcgJob, now))
-            {
-                await RunPokemonPreorderJob();
-                _jobRepository.MarkRan(Constants.Jobs.PokemonPreorderTcg);
-            }
-
-            var gundamPreorderTcgJob = jobs.FirstOrDefault(j => j.Name == Constants.Jobs.GundamPreorderTcg);
-            if (gundamPreorderTcgJob != null && _jobRepository.ShouldRun(gundamPreorderTcgJob, now))
-            {
-                await RunGundamPreorderJob();
-                _jobRepository.MarkRan(Constants.Jobs.GundamPreorderTcg);
+                var tcgJob = jobs.FirstOrDefault(j => j.Name == jobName);
+                if (tcgJob != null && _jobRepository.ShouldRun(tcgJob, now))
+                    StartTcgJob(tcgJob, scrapeJob);
             }
 
             foreach (var job in jobs.Where(j =>

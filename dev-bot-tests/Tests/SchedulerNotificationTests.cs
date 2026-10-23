@@ -5,15 +5,11 @@ namespace dev_bot_tests.Tests;
 
 public class SchedulerNotificationTests : IDisposable
 {
-    private readonly string _statePath;
+    private readonly InMemoryTcgBotState _state = new();
 
     public SchedulerNotificationTests()
     {
-        var property = typeof(BotService).GetProperty(
-            "TcgNotificationStatePath",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        _statePath = (string)property!.GetValue(null)!;
-        DeleteStateFile();
+        // each test starts with an empty store
     }
 
     [Fact]
@@ -118,7 +114,7 @@ public class SchedulerNotificationTests : IDisposable
         Assert.Contains("more item", message);
     }
 
-    public void Dispose() => DeleteStateFile();
+    public void Dispose() { }
 
     private static IReadOnlyCollection<object> InvokeGetFirstSaleProducts(
         string settingsKey,
@@ -166,10 +162,5 @@ public class SchedulerNotificationTests : IDisposable
             BindingFlags.NonPublic | BindingFlags.Static);
 
         return (string)method!.Invoke(null, [label, newProducts])!;
-    }
-    private void DeleteStateFile()
-    {
-        if (File.Exists(_statePath))
-            File.Delete(_statePath);
     }
 }
