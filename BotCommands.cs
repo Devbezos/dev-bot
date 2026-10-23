@@ -59,6 +59,8 @@ public partial class BotService
         LogInfo($"Running bot command '{command.Name}' ({command.Action}) for {user.Username} ({user.Id})");
         var reply = await channel.SendMessageAsync($"Running **{command.Name}**...", messageReference: reference,
             allowedMentions: AllowedMentions.None);
+        var from = channel is IDMChannel ? "a DM" : $"<#{channel.Id}>";
+        await PostBotCommandNotice(command.Name, user.Id, from, runId);
         _ = Task.Run(() => command.Action switch
         {
             "task" => RunTaskCommand(command, runId, reply),
@@ -67,6 +69,63 @@ public partial class BotService
             _ => Task.CompletedTask,
         });
         return true;
+    }
+
+    /// <summary>
+    /// The one message in the dashboard-chosen channel: what ran, who started it and from where; edited with the outcome
+    /// when the run finishes. Never throws: a failed post must not stop the command.
+    /// </summary>
+    public static string BotCommandNotice(string name, ulong userId, string from, bool? succeeded, int? exitCode, string? note)
+    {
+        var head = $"🖥️ **{name}** requested by <@{userId}> from {from}.";
+        if (succeeded is null) return head;
+        var exit = exitCode is { } code and not 0 ? $" (exit code {code})" : "";
+        var line = succeeded.Value ? $"✅ Finished{exit}." : $"❌ Failed{exit}.";
+        return string.IsNullOrWhiteSpace(note) ? $"{head}\n{line}" : $"{head}\n{line} {Truncate(note, 300)}";
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, (IUserMessage Message, string Name, ulong UserId, string From)> _botCommandNotices = new();
+
+    private async Task PostBotCommandNotice(string name, ulong userId, string from, int runId)
+    {
+        try
+        {
+            if (AppSettings.DryRun || _botCommandRepository.GetNotifyChannelId() is not { } channelId) return;
+            if (_discordBotClient.GetChannel(channelId) is not IMessageChannel target)
+            {
+                LogWarn($"Server command channel {channelId} isn't one the bot can post to.");
+                return;
+            }
+            var message = await target.SendMessageAsync(BotCommandNotice(name, userId, from, null, null, null),
+                allowedMentions: AllowedMentions.None);
+            _botCommandNotices[runId] = (message, name, userId, from);
+        }
+        catch (Exception ex)
+        {
+            LogWarn($"Could not post the server command notice ({ex.GetType().Name}).");
+        }
+    }
+
+    // Records the run's outcome, then updates the channel notice if there is one. <paramref name="note"/> must be safe for Discord.
+    private void FinishBotRun(int runId, bool succeeded, int? exitCode, string? output, DateTime finishedUtc, string? note = null)
+    {
+        _botCommandRepository.FinishRun(runId, succeeded, exitCode, output, finishedUtc);
+        if (!_botCommandNotices.TryRemove(runId, out var notice)) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await notice.Message.ModifyAsync(m =>
+                {
+                    m.AllowedMentions = AllowedMentions.None;
+                    m.Content = BotCommandNotice(notice.Name, notice.UserId, notice.From, succeeded, exitCode, note);
+                });
+            }
+            catch (Exception ex)
+            {
+                LogWarn($"Could not update the server command notice ({ex.GetType().Name}).");
+            }
+        });
     }
 
     private async Task RunRemoteTaskCommand(BotCommand command, int runId, ulong requestedBy, IUserMessage reply)
@@ -85,7 +144,7 @@ public partial class BotService
             result = new(false, null, "Could not confirm the task request. Check the game server before retrying.");
         }
 
-        _botCommandRepository.FinishRun(runId, result.Succeeded, result.ExitCode, result.Message, DateTime.UtcNow);
+        FinishBotRun(runId, result.Succeeded, result.ExitCode, result.Message, DateTime.UtcNow, result.Message);
         LogInfo($"Remote task '{command.Target}' (command {command.Id}, run {runId}) for user {requestedBy}: "
             + $"{(result.Succeeded ? "succeeded" : "failed")}, exit code {result.ExitCode?.ToString() ?? "none"}");
         try
@@ -111,7 +170,7 @@ public partial class BotService
         {
             if (AppSettings.DryRun)
             {
-                _botCommandRepository.FinishRun(runId, true, 0, "[DRY RUN] task not run", DateTime.UtcNow);
+                FinishBotRun(runId, true, 0, "[DRY RUN] task not run", DateTime.UtcNow);
                 await reply.ModifyAsync(m => m.Content = $"✅ **{command.Name}** finished (dry run).");
                 return;
             }
@@ -121,7 +180,7 @@ public partial class BotService
             if (!ok)
             {
                 LogWarn($"Bot command '{command.Name}' failed to start: {output}");
-                _botCommandRepository.FinishRun(runId, false, null, output, DateTime.UtcNow);
+                FinishBotRun(runId, false, null, output, DateTime.UtcNow);
                 await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**: {Truncate(output, 300)}");
                 return;
             }
@@ -129,7 +188,7 @@ public partial class BotService
             var (finished, status) = await WatchTask(command, reply, before?.LastRunTime);
             if (!finished || status is null)
             {
-                _botCommandRepository.FinishRun(runId, true, null, output, DateTime.UtcNow);
+                FinishBotRun(runId, true, null, output, DateTime.UtcNow);
                 await reply.ModifyAsync(m => m.Content = status is null
                     ? $"✅ **{command.Name}** started, but I couldn't read the task's status to see when it finishes."
                     : $"⏳ **{command.Name}** is still running after {ScriptMaxWait.TotalHours:0} hours; I've stopped watching it.");
@@ -139,7 +198,7 @@ public partial class BotService
             var result = status.LastResult;
             var succeeded = result is 0 or null;
             var code = result is { } r ? $"0x{r:X}" : "unknown";
-            _botCommandRepository.FinishRun(runId, succeeded, result, $"Last result {code}", DateTime.UtcNow);
+            FinishBotRun(runId, succeeded, result, $"Last result {code}", DateTime.UtcNow);
             if (!succeeded)
                 LogWarn($"Bot command '{command.Name}' task finished with result {code}");
             await reply.ModifyAsync(m => m.Content = succeeded
@@ -149,7 +208,7 @@ public partial class BotService
         catch (Exception ex)
         {
             LogException(ex, $"botCommand={command.Name}");
-            _botCommandRepository.FinishRun(runId, false, null, ex.Message, DateTime.UtcNow);
+            FinishBotRun(runId, false, null, ex.Message, DateTime.UtcNow);
             try { await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**: {Truncate(ex.Message, 300)}"); }
             catch (Exception replyEx) { LogWarn($"Could not report bot command failure: {replyEx.Message}"); }
         }
@@ -197,7 +256,7 @@ public partial class BotService
             if (AppSettings.DryRun)
             {
                 LogInfo($"[DRY RUN] Would run {command.Target} {command.Arguments}");
-                _botCommandRepository.FinishRun(runId, true, 0, "[DRY RUN] script not run", DateTime.UtcNow);
+                FinishBotRun(runId, true, 0, "[DRY RUN] script not run", DateTime.UtcNow);
                 await reply.ModifyAsync(m => m.Content = $"✅ **{command.Name}** finished (dry run).");
                 return;
             }
@@ -208,7 +267,7 @@ public partial class BotService
                 await reply.ModifyAsync(m => m.Content = $"⏳ **{command.Name}** is still running. I'll update this message when it finishes.");
                 if (!await WaitForExit(process, ScriptMaxWait))
                 {
-                    _botCommandRepository.FinishRun(runId, true, null, ScriptRunner.ReadLogTail(logPath), DateTime.UtcNow);
+                    FinishBotRun(runId, true, null, ScriptRunner.ReadLogTail(logPath), DateTime.UtcNow);
                     await reply.ModifyAsync(m => m.Content = $"⏳ **{command.Name}** is still running after {ScriptMaxWait.TotalHours:0} hours; I've stopped watching it.");
                     return;
                 }
@@ -216,7 +275,7 @@ public partial class BotService
 
             var output = ScriptRunner.ReadLogTail(logPath);
             var ok = process.ExitCode == 0;
-            _botCommandRepository.FinishRun(runId, ok, process.ExitCode, output, DateTime.UtcNow);
+            FinishBotRun(runId, ok, process.ExitCode, output, DateTime.UtcNow);
             if (!ok)
                 LogWarn($"Bot command '{command.Name}' exited with {process.ExitCode}");
             await reply.ModifyAsync(m => m.Content = ScriptResultMessage(command.Name, process.ExitCode, output, reply.Channel is IDMChannel));
@@ -225,7 +284,7 @@ public partial class BotService
         {
             LogException(ex, $"botCommand={command.Name}");
             // Exception messages can carry paths and credentials: the log has the details.
-            _botCommandRepository.FinishRun(runId, false, null, $"Couldn't start the script ({ex.GetType().Name}).", DateTime.UtcNow);
+            FinishBotRun(runId, false, null, $"Couldn't start the script ({ex.GetType().Name}).", DateTime.UtcNow);
             try { await reply.ModifyAsync(m => m.Content = $"❌ Couldn't run **{command.Name}**. Check the bot's log for details."); }
             catch (Exception replyEx) { LogWarn($"Could not report bot command failure: {replyEx.Message}"); }
         }

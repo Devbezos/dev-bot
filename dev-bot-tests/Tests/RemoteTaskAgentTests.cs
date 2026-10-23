@@ -100,6 +100,15 @@ public class RemoteTaskQueueTests
             BotService.RemoteTaskReply("Restart Valheim", new(false, null, "The agent didn't respond: home didn't pick it up within a minute. Check that it's running."), dryRun: false));
         Assert.Contains("dry run", BotService.RemoteTaskReply("Restart Valheim", new(true, null, "[DRY RUN]"), dryRun: true));
     }
+
+    [Fact]
+    public void ChannelNotice_NamesTheCommandWhoAndWhereThenTheOutcome()
+    {
+        Assert.Equal("🖥️ **Restart** requested by <@42> from a DM.", BotService.BotCommandNotice("Restart", 42, "a DM", null, null, null));
+        Assert.Equal("🖥️ **Restart** requested by <@42> from <#7>.\n✅ Finished. Done on home.",
+            BotService.BotCommandNotice("Restart", 42, "<#7>", true, 0, "Done on home."));
+        Assert.EndsWith("❌ Failed (exit code 3).", BotService.BotCommandNotice("Backup", 42, "a DM", false, 3, null));
+    }
 }
 
 public class BotCommandRunStarterTests
