@@ -159,39 +159,90 @@ namespace dev_bot_tests.Tests
             Assert.Equal(2, handler.Requests.Count);
         }
 
-        // ASSUMED calendar-schedules shape (unverified against the real WoW Utils API); see WoWUtilsClient.ParseAttendance.
         [Fact]
-        public async Task WoWUtils_Attendance_ParsesAssumedShape_SkipsUnknownStatuses_AndIsCached()
+        public async Task WoWUtils_Absences_ParsesTheWebAppShape_AndIsCached()
         {
             var handler = new FakeHandler(_ => Json("""
-                {"data":[
-                  {"id":"e1","name":"Heroic","date":"2026-10-20","startTime":"20:00","attendance":[
-                    {"name":"Lynx","realm":"Zul'jin","status":"present"},
-                    {"character":{"name":"Mia","realm":"Illidan"},"status":"Absent"},
-                    {"characterId":"bob-area-52","attended":true},
-                    {"name":"Tent","realm":"Illidan","status":"tentative"}]},
-                  {"id":"e2","name":"Normal","date":"2026-10-22","startTime":"20:00"}
+                {"absences":[
+                  {"_id":"a1","groupId":"g","memberId":"member_1782792322403_6andfs4od","startDate":"2026-10-25","endDate":"2026-11-01",
+                   "createdByUserId":"51075682","updatedByUserId":"u","createdAt":"2026-10-20T10:00:00Z","updatedAt":"2026-10-20T10:00:00Z","displayName":"Desma"},
+                  {"memberId":"m2","startDate":"2026-10-30T00:00:00.000Z","displayName":"Solo"},
+                  {"memberId":"m3","startDate":"not a date","displayName":"Bad"},
+                  {"startDate":"2026-10-30"}
                 ]}
                 """));
             var client = new WoWUtilsClient(Rest(handler), new ApiResponseCache());
 
-            var records = await client.GetAttendance("group", "key");
-            await client.GetAttendance("group", "key");
+            var absences = await client.GetAbsences("group", "key");
+            await client.GetAbsences("group", "key");
 
             Assert.Equal(1, handler.Requests.Count);
-            Assert.EndsWith("/v1/groups/group/calendar-schedules", handler.Requests.Single().RequestUri!.AbsolutePath);
-            Assert.Equal(
-                [("Lynx", "Zul'jin", true), ("Mia", "Illidan", false), ("bob", "area-52", true)],
-                records.Select(r => (r.Name, r.Realm, r.Attended)).ToArray());
-            Assert.All(records, r => Assert.Equal(("e1", "Heroic"), (r.EventId, r.EventName)));
+            Assert.EndsWith("/v1/groups/group/absences", handler.Requests.Single().RequestUri!.AbsolutePath);
+            Assert.Equal(2, absences.Count);
+            Assert.Equal(("member_1782792322403_6andfs4od", "Desma", new DateOnly(2026, 10, 25), new DateOnly(2026, 11, 1)),
+                (absences[0].MemberId, absences[0].DisplayName, absences[0].StartDate, absences[0].EndDate));
+            Assert.Equal((new DateOnly(2026, 10, 30), new DateOnly(2026, 10, 30)), (absences[1].StartDate, absences[1].EndDate));
         }
 
         [Fact]
-        public async Task WoWUtils_Attendance_IsEmptyWhenNoEventListsCharacters()
+        public async Task WoWUtils_Absences_EmptyWhenNoneListed_AndA404ThrowsAnApiException()
         {
-            var client = new WoWUtilsClient(Rest(new FakeHandler(_ => Json("""[{"id":"e1","name":"Raid","date":"2026-10-20"}]"""))), new ApiResponseCache());
+            var status = HttpStatusCode.OK;
+            var client = new WoWUtilsClient(Rest(new FakeHandler(_ => Json(status == HttpStatusCode.OK ? """{"absences":[]}""" : """{"error":{"code":"x","message":"no such route"}}""", status))),
+                new ApiResponseCache());
 
-            Assert.Empty(await client.GetAttendance("group", "key"));
+            Assert.Empty(await client.GetAbsences("group", "key"));
+            status = HttpStatusCode.NotFound;
+            var ex = await Assert.ThrowsAsync<WoWUtilsApiException>(() => client.GetAbsences("group", "key2"));
+            Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
+        }
+
+        [Fact]
+        public async Task WoWUtils_Roster_KeepsThePersonIdAndName_OnEachCharacter()
+        {
+            var client = new WoWUtilsClient(Rest(new FakeHandler(_ => Json("""
+                {"members":[{"memberId":"member_1","displayName":"Desma","characters":[
+                  {"name":"Desma","realm":"Illidan","status":"main"},{"name":"Alt","realm":"Illidan","status":"alt"}]},
+                 {"id":"member_2","characters":[{"name":"Other","realm":"Illidan","status":"main"}]}]}
+                """))), new ApiResponseCache());
+
+            var roster = await client.GetRosterMembers("group", "key");
+
+            Assert.Equal([("Desma", "member_1", "Desma"), ("Alt", "member_1", "Desma"), ("Other", "member_2", null)],
+                roster.Select(m => (m.Name, m.MemberId, m.PersonName)).ToArray());
+        }
+
+        [Fact]
+        public void WarcraftLogs_ParsePlayerStats_AveragesParses_CountsDeaths_AndAcceptsEncodedScalars()
+        {
+            var dps = Newtonsoft.Json.Linq.JToken.Parse("""
+                {"data":[
+                 {"encounter":{"id":1},"roles":{"tanks":{"characters":[{"name":"Lynx","server":{"name":"Zul'jin"},"rankPercent":80}]},
+                                                "dps":{"characters":[{"name":"Mia","server":{"name":"Illidan"},"rankPercent":50.5},{"name":"Nobody"}]}}},
+                 {"encounter":{"id":2},"roles":{"tanks":{"characters":[{"name":"Lynx","server":{"name":"Zul'jin"},"bracketPercent":60}]}}}]}
+                """);
+            var hps = Newtonsoft.Json.Linq.JToken.FromObject("""{"data":[{"roles":{"healers":{"characters":[{"name":"Heal","server":{"slug":"illidan"},"rankPercent":90}]}}}]}""");
+            var deaths = Newtonsoft.Json.Linq.JToken.Parse("""{"data":{"entries":[{"name":"Lynx"},{"name":"lynx"},{"name":"Mia"},{"name":"Ghost"}]}}""");
+
+            var stats = WarcraftLogsClient.ParsePlayerStats(dps, hps, deaths).ToDictionary(s => s.Name);
+
+            Assert.Equal((140.0, 2, 2), (stats["Lynx"].ParseTotal, stats["Lynx"].ParseCount, stats["Lynx"].Deaths));
+            Assert.Equal("Zul'jin", stats["Lynx"].Server);
+            Assert.Equal((50.5, 1, 1), (stats["Mia"].ParseTotal, stats["Mia"].ParseCount, stats["Mia"].Deaths));
+            Assert.Equal((90.0, 1, 0), (stats["Heal"].ParseTotal, stats["Heal"].ParseCount, stats["Heal"].Deaths));
+            Assert.Equal((0, 0, 1), (stats["Ghost"].ParseCount, (int)stats["Ghost"].ParseTotal, stats["Ghost"].Deaths));
+            Assert.False(stats.ContainsKey("Nobody"));
+        }
+
+        [Fact]
+        public void WarcraftLogs_ParsePlayerStats_DeathsAreNullWhenTheTableIsMissing_AndEverythingIsEmptyForNoData()
+        {
+            var dps = Newtonsoft.Json.Linq.JToken.Parse("""{"data":[{"roles":{"dps":{"characters":[{"name":"Mia","rankPercent":70}]}}}]}""");
+
+            var stats = WarcraftLogsClient.ParsePlayerStats(dps, null, null);
+
+            Assert.Null(Assert.Single(stats).Deaths);
+            Assert.Empty(WarcraftLogsClient.ParsePlayerStats(null, null, null));
         }
 
         [Fact]
