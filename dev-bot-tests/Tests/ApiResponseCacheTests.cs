@@ -158,5 +158,56 @@ namespace dev_bot_tests.Tests
             Assert.Equal("key-b", Assert.Single(b).Name);
             Assert.Equal(2, handler.Requests.Count);
         }
+
+        // ASSUMED calendar-schedules shape (unverified against the real WoW Utils API); see WoWUtilsClient.ParseAttendance.
+        [Fact]
+        public async Task WoWUtils_Attendance_ParsesAssumedShape_SkipsUnknownStatuses_AndIsCached()
+        {
+            var handler = new FakeHandler(_ => Json("""
+                {"data":[
+                  {"id":"e1","name":"Heroic","date":"2026-10-20","startTime":"20:00","attendance":[
+                    {"name":"Lynx","realm":"Zul'jin","status":"present"},
+                    {"character":{"name":"Mia","realm":"Illidan"},"status":"Absent"},
+                    {"characterId":"bob-area-52","attended":true},
+                    {"name":"Tent","realm":"Illidan","status":"tentative"}]},
+                  {"id":"e2","name":"Normal","date":"2026-10-22","startTime":"20:00"}
+                ]}
+                """));
+            var client = new WoWUtilsClient(Rest(handler), new ApiResponseCache());
+
+            var records = await client.GetAttendance("group", "key");
+            await client.GetAttendance("group", "key");
+
+            Assert.Equal(1, handler.Requests.Count);
+            Assert.EndsWith("/v1/groups/group/calendar-schedules", handler.Requests.Single().RequestUri!.AbsolutePath);
+            Assert.Equal(
+                [("Lynx", "Zul'jin", true), ("Mia", "Illidan", false), ("bob", "area-52", true)],
+                records.Select(r => (r.Name, r.Realm, r.Attended)).ToArray());
+            Assert.All(records, r => Assert.Equal(("e1", "Heroic"), (r.EventId, r.EventName)));
+        }
+
+        [Fact]
+        public async Task WoWUtils_Attendance_IsEmptyWhenNoEventListsCharacters()
+        {
+            var client = new WoWUtilsClient(Rest(new FakeHandler(_ => Json("""[{"id":"e1","name":"Raid","date":"2026-10-20"}]"""))), new ApiResponseCache());
+
+            Assert.Empty(await client.GetAttendance("group", "key"));
+        }
+
+        [Fact]
+        public void WarcraftLogs_ParsePlayerDetails_FlattensRoles_AndAcceptsAnEncodedScalar()
+        {
+            var details = Newtonsoft.Json.Linq.JToken.Parse("""
+                {"data":{"playerDetails":{"tanks":[{"name":"Lynx","server":"Zul'jin","type":"Druid"}],
+                 "healers":[],"dps":[{"name":"Mia","type":"Mage"},{"name":"mia","type":"Mage"}]}}}
+                """);
+
+            var players = WarcraftLogsClient.ParsePlayerDetails(details);
+
+            Assert.Equal(["Lynx", "Mia"], players.Select(p => p.Name).ToArray());
+            Assert.Equal("Zul'jin", players[0].Server);
+            Assert.Equal(2, WarcraftLogsClient.ParsePlayerDetails(Newtonsoft.Json.Linq.JToken.FromObject(details.ToString())).Count);
+            Assert.Empty(WarcraftLogsClient.ParsePlayerDetails(null));
+        }
     }
 }
