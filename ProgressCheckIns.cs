@@ -99,7 +99,7 @@ public partial class BotService
     }
 
     private GoogleHealthUserSettings? FindFitnessUserFor(ulong userId) =>
-        FitnessUserMatch.Find(userId, _fitnessRepository.GetGoogleHealthSettingsAll(), _discordUserRepository.GetAll(), _hevyRepository.GetState());
+        FitnessUserMatch.Find(userId, _fitnessRepository.GetGoogleHealthSettingsAll(), _discordUserRepository.GetAll(), _hevyRepository.GetStateForDiscordUser(userId.ToString()));
 
     private async Task SaveAutoHabits(IEnumerable<(string Date, AutoHabitStats Stats)> days)
     {
