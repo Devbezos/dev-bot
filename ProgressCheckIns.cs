@@ -47,6 +47,8 @@ public partial class BotService
             return;
         }
 
+        // Read before creating today's rows; deleted after the new questions are sent so only the latest check-in shows.
+        var previous = _progressCheckInRepository.GetPreviousMessageRefs(userId, date);
         await dm.SendMessageAsync(
             $"📋 **Daily check-in · {DateOnly.FromDateTime(nowLocal).ToString("dddd, MMM d", CultureInfo.InvariantCulture)}**\n" +
             "-# Tap ✅ or ❌ for each one. For numbers like steps, reply with the amount (replying to the question picks which one).");
@@ -64,6 +66,7 @@ public partial class BotService
                 LogWarn($"Progress check-in DM for '{item.ItemName}' failed: {ex.Message}");
             }
         }
+        await DeleteDiscordMessages(previous);
     }
 
     // Fills sleep, steps, gym and calories habits for `day` from Google Health (and Hevy) right before the check-in.
