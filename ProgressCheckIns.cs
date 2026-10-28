@@ -49,16 +49,20 @@ public partial class BotService
 
         // Read before creating today's rows; deleted after the new questions are sent so only the latest check-in shows.
         var previous = _progressCheckInRepository.GetPreviousMessageRefs(userId, date);
-        await dm.SendMessageAsync(
+        // The header rides on the first question so it is stored and deleted with the rest.
+        var header =
             $"📋 **Daily check-in · {DateOnly.FromDateTime(nowLocal).ToString("dddd, MMM d", CultureInfo.InvariantCulture)}**\n" +
-            "-# Tap ✅ or ❌ for each one. For numbers like steps, reply with the amount (replying to the question picks which one).");
+            "-# Tap ✅ or ❌ for each one. For numbers like steps, reply with the amount (replying to the question picks which one).\n\n";
+        var sent = 0;
         foreach (var item in items)
         {
             item.Id = _progressCheckInRepository.Create(item);
             try
             {
-                var message = await dm.SendMessageAsync(BuildCheckInText(item, state, status: null), components: BuildCheckInButtons(item, state));
+                var text = BuildCheckInText(item, state, status: null);
+                var message = await dm.SendMessageAsync(sent == 0 ? header + text : text, components: BuildCheckInButtons(item, state));
                 _progressCheckInRepository.SetMessage(item.Id, dm.Id, message.Id);
+                sent++;
             }
             catch (Exception ex)
             {
@@ -66,7 +70,8 @@ public partial class BotService
                 LogWarn($"Progress check-in DM for '{item.ItemName}' failed: {ex.Message}");
             }
         }
-        await DeleteDiscordMessages(previous);
+        if (sent > 0)
+            await DeleteDiscordMessages(previous);
     }
 
     // Fills sleep, steps, gym and calories habits for `day` from Google Health (and Hevy) right before the check-in.

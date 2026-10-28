@@ -108,7 +108,7 @@ public partial class BotService
             }
             catch (Exception ex)
             {
-                LogWarn($"Could not delete earlier reminder message {messageId}: {ex.Message}");
+                LogWarn($"Could not delete earlier message {messageId}: {ex.Message}");
             }
         }
     }
